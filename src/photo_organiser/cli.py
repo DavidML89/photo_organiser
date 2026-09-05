@@ -109,11 +109,25 @@ def embed_cmd(
 
 
 @app.command("group")
-def group_cmd() -> None:
+def group_cmd(
+    time_window: int | None = typer.Option(
+        None, "--time-window", help="Burst window in seconds (default from settings)"
+    ),
+    time_cosine: float | None = typer.Option(
+        None, "--time-cosine", help="Min cosine for time-window pairs (lower=more groups)"
+    ),
+    global_cosine: float | None = typer.Option(
+        None, "--global-cosine", help="Min cosine for global ANN pairs (lower=more groups)"
+    ),
+) -> None:
     """Build near-duplicate groups (time window + ANN + Union-Find)."""
     from photo_organiser.group import build_groups
 
-    build_groups()
+    build_groups(
+        time_window_s=time_window,
+        time_cosine=time_cosine,
+        global_cosine=global_cosine,
+    )
 
 
 @app.command("score")

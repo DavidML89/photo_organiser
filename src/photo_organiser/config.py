@@ -42,10 +42,11 @@ class Settings(BaseSettings):
     embed_batch_size: int = 32
     embed_checkpoint_every: int = 64
 
-    # Grouping
-    time_window_s: int = 30
-    time_cosine_threshold: float = 0.92
-    global_cosine_threshold: float = 0.97
+    # Grouping — defaults tuned for 256px DINOv2 thumbs (stricter = fewer groups).
+    # Bursts are usually caught by the time window; global ANN catches re-uploads.
+    time_window_s: int = 120
+    time_cosine_threshold: float = 0.88
+    global_cosine_threshold: float = 0.94
     ann_topk: int = 20
     min_group_size: int = 2
 
