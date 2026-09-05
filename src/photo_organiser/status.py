@@ -7,8 +7,29 @@ from rich.table import Table
 
 from photo_organiser.config import Settings, get_settings
 from photo_organiser.db import get_db
+from photo_organiser.paths import thumb_path
 
 console = Console()
+
+
+def _sample_thumbs_on_disk(conn, thumbs_dir, sample_size: int = 50) -> tuple[int, int]:
+    """Return (present, sampled) for a random-ish sample of thumb_cached rows."""
+    rows = conn.execute(
+        """
+        SELECT media_key FROM photos
+        WHERE thumb_cached=1 AND is_video=0
+        LIMIT ?
+        """,
+        (sample_size,),
+    ).fetchall()
+    if not rows:
+        return 0, 0
+    present = 0
+    for r in rows:
+        path = thumb_path(r["media_key"], thumbs_dir)
+        if path.exists() and path.stat().st_size > 0:
+            present += 1
+    return present, len(rows)
 
 
 def status(settings: Settings | None = None) -> dict:
@@ -18,6 +39,7 @@ def status(settings: Settings | None = None) -> dict:
         def count(sql: str) -> int:
             return conn.execute(sql).fetchone()["c"]
 
+        on_disk, sampled = _sample_thumbs_on_disk(conn, settings.thumbs_dir)
         stats = {
             "photos_total": count("SELECT COUNT(*) AS c FROM photos"),
             "videos": count("SELECT COUNT(*) AS c FROM photos WHERE is_video=1"),
@@ -34,6 +56,7 @@ def status(settings: Settings | None = None) -> dict:
             "thumbs_cached": count(
                 "SELECT COUNT(*) AS c FROM photos WHERE thumb_cached=1 AND is_video=0"
             ),
+            "thumbs_on_disk_sample": f"{on_disk}/{sampled}",
             "ready_to_embed": count(
                 """
                 SELECT COUNT(*) AS c FROM photos
@@ -61,9 +84,18 @@ def status(settings: Settings | None = None) -> dict:
         table.add_row(k, str(v))
     console.print(table)
 
+    thumbs_missing = sampled > 0 and on_disk < sampled // 2
+
     # Actionable next step
     if stats["photos_total"] == 0:
         console.print("[yellow]Next: import census.jsonl → `photo-organiser census import`[/yellow]")
+    elif thumbs_missing:
+        console.print(
+            f"[red]DB says thumbs_cached={stats['thumbs_cached']} but only "
+            f"{on_disk}/{sampled} sampled files exist under {settings.thumbs_dir}.[/red]\n"
+            "[yellow]Next: re-download → "
+            "`uv run photo-organiser fetch thumbs --repair`[/yellow]"
+        )
     elif stats["thumbs_cached"] < 2:
         console.print(
             "[yellow]Next: download thumbs → `uv run photo-organiser fetch thumbs`[/yellow]"

@@ -50,6 +50,7 @@ async def fetch_images(
     only_group_members: bool = False,
     limit: int | None = None,
     verify_urls: int = 0,
+    repair: bool = False,
     settings: Settings | None = None,
 ) -> dict:
     """Fetch 256px thumbs or 1600px previews.
@@ -59,12 +60,36 @@ async def fetch_images(
         only_group_members: For previews, only fetch photos that are in a group.
         limit: Optional max items (useful for smoke tests).
         verify_urls: If >0, fetch that many and stop — used to verify no-auth claim.
+        repair: If True, clear ``*_cached`` flags when the file is missing on disk,
+            then download those again.
     """
     settings = settings or get_settings()
     size = settings.thumb_size if kind == "thumb" else settings.preview_size
     root = settings.thumbs_dir if kind == "thumb" else settings.previews_dir
     flag_col = "thumb_cached" if kind == "thumb" else "preview_cached"
     path_fn = thumb_path if kind == "thumb" else preview_path
+
+    if repair:
+        repaired = 0
+        with get_db(settings.db_path) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT media_key FROM photos
+                WHERE {flag_col}=1 AND is_video=0
+                """
+            ).fetchall()
+            for r in rows:
+                dest = path_fn(r["media_key"], root)
+                if not dest.exists() or dest.stat().st_size == 0:
+                    conn.execute(
+                        f"UPDATE photos SET {flag_col}=0 WHERE media_key=?",
+                        (r["media_key"],),
+                    )
+                    repaired += 1
+        console.print(
+            f"[cyan]Repair:[/cyan] cleared {repaired} stale {flag_col} flags "
+            f"(file missing under {root})"
+        )
 
     with get_db(settings.db_path) as conn:
         if only_group_members and kind == "preview":

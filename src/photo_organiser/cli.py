@@ -84,11 +84,16 @@ def census_report() -> None:
 def fetch_thumbs(
     limit: Optional[int] = typer.Option(None, help="Max items"),
     verify: int = typer.Option(0, help="Fetch N items then stop (auth check)"),
+    repair: bool = typer.Option(
+        False,
+        "--repair",
+        help="Clear thumb_cached when the file is missing on disk, then re-download",
+    ),
 ) -> None:
     """Fetch 256px thumbnails for grouping."""
     from photo_organiser.fetch import fetch_sync
 
-    fetch_sync(kind="thumb", limit=limit, verify_urls=verify)
+    fetch_sync(kind="thumb", limit=limit, verify_urls=verify, repair=repair)
 
 
 @fetch_app.command("previews")

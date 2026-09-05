@@ -101,6 +101,7 @@ def embed(
     settings = settings or get_settings()
     device = resolve_device(device_prefer)
     console.print(f"Embedding on {device.kind} — {device.name}")
+    console.print(f"Thumbs dir: {settings.thumbs_dir}")
 
     batch_size = batch_size or settings.embed_batch_size
     backend = load_dinov2(device, settings.dinov2_model)
@@ -122,11 +123,40 @@ def embed(
         console.print("[green]Nothing to embed.[/green]")
         return {"embedded": 0, "failed": 0, "device": device.kind}
 
+    # Spot-check that cached thumbs actually exist on disk
+    missing = 0
+    sample_errors: list[str] = []
+    for mk in keys[:50]:
+        path = thumb_path(mk, settings.thumbs_dir)
+        if not path.exists() or path.stat().st_size == 0:
+            missing += 1
+            if len(sample_errors) < 5:
+                sample_errors.append(f"missing/empty: {path}")
+    if missing >= 25:
+        console.print(
+            f"[red]Thumb files missing on disk ({missing}/50 sampled). "
+            f"DB says thumb_cached=1 but files are not at {settings.thumbs_dir}.[/red]"
+        )
+        for line in sample_errors:
+            console.print(f"  [dim]{line}[/dim]")
+        console.print(
+            "[yellow]Fix: reset flags and re-download thumbs:[/yellow]\n"
+            "  uv run photo-organiser fetch thumbs --repair\n"
+            "  uv run photo-organiser embed"
+        )
+        return {
+            "embedded": 0,
+            "failed": len(keys),
+            "device": device.kind,
+            "thumbs_missing": True,
+        }
+
     console.print(f"Embedding {len(keys)} images (batch={batch_size})")
 
     embedded = 0
     failed = 0
     i = 0
+    logged = 0
 
     with Progress(
         TextColumn("[progress.description]{task.description}"),
@@ -147,8 +177,11 @@ def embed(
                     img = Image.open(path).convert("RGB")
                     images.append(img)
                     valid_keys.append(mk)
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
                     failed += 1
+                    if logged < 8:
+                        console.print(f"[yellow]skip {mk[:24]}… → {path}: {exc}[/yellow]")
+                        logged += 1
                     progress.advance(task)
                     continue
 
@@ -174,14 +207,12 @@ def embed(
                     conn.execute(
                         """
                         INSERT INTO embeddings(media_key, dim, vector) VALUES(?, ?, ?)
-                        ON CONFLICT(media_key) DO UPDATE SET dim=excluded.dim, vector=excluded.vector
+                        ON CONFLICT(media_key) DO UPDATE SET
+                            dim=excluded.dim, vector=excluded.vector
                         """,
                         (mk, int(vec.shape[0]), _vector_to_blob(vec)),
                     )
                     conn.execute("UPDATE photos SET embedded=1 WHERE media_key=?", (mk,))
-                    # Also dump numpy sidecar for debugging / ANN export
-                    npy = settings.embeddings_dir / f"{mk}.npy"
-                    # hashed path would be nicer but media keys can be long; use flat with hash
                     from hashlib import sha1
 
                     h = sha1(mk.encode()).hexdigest()
@@ -193,11 +224,21 @@ def embed(
             progress.advance(task, len(chunk_keys))
             i += batch_size
 
-            if embedded % (settings.embed_checkpoint_every * max(batch_size, 1)) == 0:
+            if embedded and embedded % (settings.embed_checkpoint_every * max(batch_size, 1)) == 0:
                 console.print(f"[dim]checkpoint: {embedded} embedded[/dim]")
 
-    result = {"embedded": embedded, "failed": failed, "device": device.kind, "batch_size": batch_size}
+    result = {
+        "embedded": embedded,
+        "failed": failed,
+        "device": device.kind,
+        "batch_size": batch_size,
+    }
     console.print(result)
+    if embedded == 0 and failed:
+        console.print(
+            "[red]All embeds failed. Usually thumb files are missing — "
+            "run `uv run photo-organiser fetch thumbs --repair` then embed again.[/red]"
+        )
     return result
 
 
