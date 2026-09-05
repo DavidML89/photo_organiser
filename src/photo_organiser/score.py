@@ -216,7 +216,7 @@ def score_groups(settings: Settings | None = None) -> dict:
 
     scored = 0
     with Progress(
-        TextColumn(),
+        TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         TaskProgressColumn(),
         TimeRemainingColumn(),

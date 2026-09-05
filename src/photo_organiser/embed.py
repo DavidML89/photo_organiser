@@ -129,7 +129,7 @@ def embed(
     i = 0
 
     with Progress(
-        TextColumn(),
+        TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         TaskProgressColumn(),
         TimeRemainingColumn(),

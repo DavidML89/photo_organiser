@@ -120,7 +120,7 @@ async def fetch_images(
                 failed += 1
 
         with Progress(
-            TextColumn(),
+            TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TaskProgressColumn(),
             TimeRemainingColumn(),
