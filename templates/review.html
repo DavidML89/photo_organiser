@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>photo-organiser review</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #1a1d24;
+      --text: #e8eaed;
+      --muted: #9aa0a6;
+      --accent: #8ab4f8;
+      --good: #81c995;
+      --warn: #fdd663;
+      --bad: #f28b82;
+      --border: #2d3139;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+    .stats { color: var(--muted); font-size: 13px; }
+    .help {
+      padding: 8px 20px;
+      font-size: 12px;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+    }
+    .help kbd {
+      background: #2a2f38;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-size: 11px;
+    }
+    #grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 12px;
+      padding: 16px 20px 80px;
+    }
+    .card {
+      background: var(--panel);
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      cursor: pointer;
+      position: relative;
+    }
+    .card.keeper { border-color: var(--good); }
+    .card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+    .card img {
+      width: 100%;
+      height: 220px;
+      object-fit: contain;
+      background: #000;
+      display: block;
+    }
+    .meta { padding: 8px 10px 10px; font-size: 12px; color: var(--muted); }
+    .meta .total { color: var(--text); font-weight: 600; font-size: 13px; }
+    .badge {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      background: var(--good);
+      color: #0f1115;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+    .fav {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: var(--warn);
+      color: #0f1115;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+    #empty, #done {
+      padding: 60px 20px;
+      text-align: center;
+      color: var(--muted);
+    }
+    footer {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      display: flex;
+      gap: 8px;
+      padding: 12px 20px;
+      background: rgba(26,29,36,0.95);
+      border-top: 1px solid var(--border);
+      backdrop-filter: blur(8px);
+    }
+    button {
+      background: #2a2f38;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button.primary { background: var(--good); color: #0f1115; border-color: transparent; font-weight: 700; }
+    button.danger { background: transparent; color: var(--bad); border-color: var(--bad); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>photo-organiser · review duplicates</h1>
+    <div class="stats">
+      <span id="pending">{{ pending }}</span> pending ·
+      <span id="decided">{{ decided }}</span> decided ·
+      group <code id="gid">—</code>
+    </div>
+  </header>
+  <div class="help">
+    <kbd>A</kbd> accept proposed keeper ·
+    <kbd>1</kbd>–<kbd>9</kbd> pick card as keeper (override) ·
+    <kbd>S</kbd> skip ·
+    <kbd>N</kbd> next · click a card to select
+  </div>
+  <div id="empty" hidden>No pending groups. Run grouping + scoring, or you're done.</div>
+  <div id="done" hidden>All groups reviewed. Export with <code>photo-organiser apply export</code>.</div>
+  <div id="grid"></div>
+  <footer>
+    <button class="primary" id="btn-accept">Accept keeper (A)</button>
+    <button id="btn-override" disabled>Override with selection (Enter)</button>
+    <button id="btn-skip">Skip (S)</button>
+  </footer>
+
+  <script>
+    let current = null;
+    let selected = null;
+    const initial = {{ initial_group_id|tojson }};
+
+    const grid = document.getElementById('grid');
+    const empty = document.getElementById('empty');
+    const done = document.getElementById('done');
+
+    async function loadGroup(id) {
+      const url = id ? `/api/group/${id}` : '/api/group/next';
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.done) {
+        current = null;
+        grid.innerHTML = '';
+        done.hidden = false;
+        empty.hidden = true;
+        document.getElementById('gid').textContent = '—';
+        return;
+      }
+      done.hidden = true;
+      empty.hidden = true;
+      current = data;
+      selected = data.proposed_keeper;
+      document.getElementById('gid').textContent = data.group_id;
+      render();
+    }
+
+    function render() {
+      grid.innerHTML = '';
+      current.members.forEach((m, idx) => {
+        const card = document.createElement('div');
+        card.className = 'card' +
+          (m.is_proposed_keeper ? ' keeper' : '') +
+          (selected === m.media_key ? ' selected' : '');
+        card.dataset.key = m.media_key;
+        card.onclick = () => {
+          selected = m.media_key;
+          document.getElementById('btn-override').disabled = selected === current.proposed_keeper;
+          render();
+        };
+        const img = document.createElement('img');
+        img.src = `/media/${encodeURIComponent(m.media_key)}?kind=preview`;
+        img.alt = m.media_key;
+        card.appendChild(img);
+        if (m.is_proposed_keeper) {
+          const b = document.createElement('div');
+          b.className = 'badge';
+          b.textContent = 'KEEPER';
+          card.appendChild(b);
+        }
+        if (m.is_favorite) {
+          const f = document.createElement('div');
+          f.className = 'fav';
+          f.textContent = 'FAV';
+          card.appendChild(f);
+        }
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        const s = m.score || {};
+        meta.innerHTML = `
+          <div class="total">#${idx + 1} · score ${(s.total || 0).toFixed(3)}</div>
+          <div>${m.res_width || '?'}×${m.res_height || '?'}</div>
+          <div>sharp ${(s.sharpness||0).toFixed(2)} · eyes ${(s.eyes||0).toFixed(2)} · smile ${(s.smile||0).toFixed(2)}</div>
+          <div>expo ${(s.exposure||0).toFixed(2)} · aes ${(s.aesthetic||0).toFixed(2)}</div>
+        `;
+        card.appendChild(meta);
+        grid.appendChild(card);
+      });
+      document.getElementById('btn-override').disabled =
+        !selected || selected === current.proposed_keeper;
+    }
+
+    async function decide(action) {
+      if (!current) return;
+      const body = { action };
+      if (action === 'override') body.keep_media_key = selected;
+      const res = await fetch(`/api/group/${current.group_id}/decide`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        alert('Decision failed: ' + (await res.text()));
+        return;
+      }
+      const pendingEl = document.getElementById('pending');
+      const decidedEl = document.getElementById('decided');
+      pendingEl.textContent = Math.max(0, parseInt(pendingEl.textContent, 10) - 1);
+      decidedEl.textContent = parseInt(decidedEl.textContent, 10) + 1;
+      await loadGroup(null);
+    }
+
+    document.getElementById('btn-accept').onclick = () => decide('accept');
+    document.getElementById('btn-override').onclick = () => decide('override');
+    document.getElementById('btn-skip').onclick = () => decide('skip');
+
+    window.addEventListener('keydown', (e) => {
+      if (!current) return;
+      if (e.key === 'a' || e.key === 'A') decide('accept');
+      else if (e.key === 's' || e.key === 'S') decide('skip');
+      else if (e.key === 'n' || e.key === 'N') loadGroup(null);
+      else if (e.key === 'Enter') {
+        if (selected && selected !== current.proposed_keeper) decide('override');
+      } else if (e.key >= '1' && e.key <= '9') {
+        const idx = parseInt(e.key, 10) - 1;
+        if (current.members[idx]) {
+          selected = current.members[idx].media_key;
+          render();
+        }
+      }
+    });
+
+    if (initial) loadGroup(initial);
+    else {
+      empty.hidden = false;
+    }
+  </script>
+</body>
+</html>

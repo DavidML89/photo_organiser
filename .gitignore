@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+
+# Local data (machine-specific, never commit)
+data/
+*.db
+*.db-wal
+*.db-shm
+census.jsonl
+*.npy
+*.npz
+embeddings/
+thumbs/
+previews/
+logs/
+undo/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Models downloaded at runtime
+models/
+*.task

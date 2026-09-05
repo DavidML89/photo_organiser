@@ -1,0 +1,60 @@
+[project]
+name = "photo-organiser"
+version = "0.1.0"
+description = "Local Google Photos duplicate finder and best-shot picker"
+readme = "README.md"
+authors = [
+    { name = "David Lesavourey", email = "david.lesavourey@paysafe.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "aiofiles>=25.1.0",
+    "faiss-cpu>=1.15.0",
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "imagehash>=4.3.2",
+    "jinja2>=3.1.6",
+    "mediapipe>=1.0.1",
+    "numpy>=2.5.2",
+    "opencv-python-headless>=5.0.0.93",
+    "pillow>=12.3.0",
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.15.0",
+    "rich>=15.0.0",
+    "tqdm>=4.70.0",
+    "typer>=0.27.2",
+    "uvicorn>=0.52.4",
+]
+
+[project.optional-dependencies]
+ml = [
+    "torch",
+    "torchvision",
+    "timm",
+]
+
+[project.scripts]
+photo-organiser = "photo_organiser.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.6",
+]
+
+[tool.uv]
+# Install torch separately for the right backend:
+#   Windows CUDA: uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#   macOS MPS:    uv pip install torch torchvision
+#   CPU only:     uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
