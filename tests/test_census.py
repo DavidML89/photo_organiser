@@ -63,12 +63,13 @@ def test_census_import_and_safety(tmp_path: Path):
     assert stats["live_photos"] == 1
 
     excl = apply_exclusions(settings)
-    assert excl["total_excluded"] >= 3
+    # Favorites, videos, live photos excluded; album members stay eligible for embed/group
+    assert excl["total_excluded"] == 3
+    assert excl["album_members"] == 0
 
     with get_db(settings.db_path) as conn:
-        kept = conn.execute(
-            "SELECT media_key FROM photos WHERE excluded=0"
-        ).fetchall()
-        # mk4 is album member → excluded; only none left if all flagged…
-        # favorites, video, live, album → all 4 excluded
-        assert len(kept) == 0
+        kept = [
+            r["media_key"]
+            for r in conn.execute("SELECT media_key FROM photos WHERE excluded=0").fetchall()
+        ]
+        assert kept == ["mk4"]

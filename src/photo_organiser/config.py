@@ -58,9 +58,10 @@ class Settings(BaseSettings):
     weight_aesthetic: float = 0.10
     weight_resolution: float = 0.05
 
-    # Safety
+    # Safety — album members are NOT excluded from embed/group by default.
+    # They are still blocked from trash at apply time (see apply.py).
     exclude_favorites: bool = True
-    exclude_album_members: bool = True
+    exclude_album_members: bool = False
     exclude_videos: bool = True
     exclude_live_photos: bool = True
 

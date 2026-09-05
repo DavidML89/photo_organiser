@@ -78,8 +78,14 @@ def build_groups(
 
     keys, mat = load_all_embeddings(settings)
     if len(keys) < 2:
-        console.print("[yellow]Need at least 2 embeddings to group.[/yellow]")
-        return {"groups": 0, "members": 0}
+        from photo_organiser.status import status
+
+        console.print(
+            f"[yellow]Need at least 2 embeddings to group "
+            f"(currently {len(keys)}).[/yellow]"
+        )
+        status(settings)
+        return {"groups": 0, "members": 0, "candidates_embedded": len(keys)}
 
     # Ensure L2-normalised for inner-product == cosine
     norms = np.linalg.norm(mat, axis=1, keepdims=True)

@@ -30,6 +30,14 @@ def _root() -> None:
     get_settings()  # ensure dirs exist
 
 
+@app.command("status")
+def status_cmd() -> None:
+    """Show pipeline funnel counts and the suggested next step."""
+    from photo_organiser.status import status
+
+    status()
+
+
 @app.command("device")
 def device_cmd(
     prefer: Optional[str] = typer.Option(None, help="Force cuda|mps|cpu"),

@@ -37,12 +37,15 @@ def export_trash_payload(settings: Settings | None = None) -> Path:
         for row in rows:
             for dedup_key in json.loads(row["trash_dedup_keys"]):
                 photo = conn.execute(
-                    "SELECT media_key, is_favorite, excluded FROM photos WHERE dedup_key=?",
+                    """
+                    SELECT media_key, is_favorite, excluded, in_album
+                    FROM photos WHERE dedup_key=?
+                    """,
                     (dedup_key,),
                 ).fetchone()
                 if not photo:
                     continue
-                if photo["is_favorite"] or photo["excluded"]:
+                if photo["is_favorite"] or photo["excluded"] or photo["in_album"]:
                     continue
                 items.append(
                     {
