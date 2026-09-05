@@ -17,46 +17,72 @@ from photo_organiser.paths import preview_path, thumb_path
 
 console = Console()
 
-_face_landmarker = None
+# None = not tried yet; False = unavailable (don't retry); else the landmarker
+_face_landmarker: object | None = None
 
 
 def _get_landmarker(models_dir: Path):
-    """Lazy-load MediaPipe Face Landmarker with blendshapes."""
+    """Lazy-load MediaPipe Face Landmarker with blendshapes.
+
+    On WSL/headless Linux, MediaPipe often needs ``libGLESv2`` (``libgles2``).
+    If that (or anything else) fails, we degrade to neutral face scores so
+    sharpness/exposure scoring still works.
+    """
     global _face_landmarker
+    if _face_landmarker is False:
+        return None
     if _face_landmarker is not None:
         return _face_landmarker
 
     try:
-        import mediapipe as mp
         from mediapipe.tasks import python as mp_python
         from mediapipe.tasks.python import vision
     except ImportError:
         console.print("[yellow]mediapipe not available — face scores will be neutral[/yellow]")
+        _face_landmarker = False
         return None
 
     model_path = models_dir / "face_landmarker.task"
-    if not model_path.exists():
-        # Download official model bundle
-        import urllib.request
+    try:
+        if not model_path.exists():
+            import urllib.request
 
-        models_dir.mkdir(parents=True, exist_ok=True)
-        url = (
-            "https://storage.googleapis.com/mediapipe-models/"
-            "face_landmarker/face_landmarker/float16/1/face_landmarker.task"
+            models_dir.mkdir(parents=True, exist_ok=True)
+            url = (
+                "https://storage.googleapis.com/mediapipe-models/"
+                "face_landmarker/face_landmarker/float16/1/face_landmarker.task"
+            )
+            console.print(f"Downloading Face Landmarker model → {model_path}")
+            urllib.request.urlretrieve(url, model_path)
+
+        base = mp_python.BaseOptions(model_asset_path=str(model_path))
+        options = vision.FaceLandmarkerOptions(
+            base_options=base,
+            running_mode=vision.RunningMode.IMAGE,
+            num_faces=10,
+            output_face_blendshapes=True,
+            output_facial_transformation_matrixes=False,
         )
-        console.print(f"Downloading Face Landmarker model → {model_path}")
-        urllib.request.urlretrieve(url, model_path)
-
-    base = mp_python.BaseOptions(model_asset_path=str(model_path))
-    options = vision.FaceLandmarkerOptions(
-        base_options=base,
-        running_mode=vision.RunningMode.IMAGE,
-        num_faces=10,
-        output_face_blendshapes=True,
-        output_facial_transformation_matrixes=False,
-    )
-    _face_landmarker = vision.FaceLandmarker.create_from_options(options)
-    return _face_landmarker
+        _face_landmarker = vision.FaceLandmarker.create_from_options(options)
+        return _face_landmarker
+    except OSError as exc:
+        console.print(
+            f"[yellow]Face Landmarker unavailable ({exc}). "
+            "Face scores will be neutral; sharpness/exposure still run.[/yellow]"
+        )
+        console.print(
+            "[dim]Optional on Ubuntu/WSL for face scoring: "
+            "sudo apt install -y libgles2[/dim]"
+        )
+        _face_landmarker = False
+        return None
+    except Exception as exc:  # noqa: BLE001 — model load can fail many ways
+        console.print(
+            f"[yellow]Face Landmarker failed to load ({exc}). "
+            "Face scores will be neutral.[/yellow]"
+        )
+        _face_landmarker = False
+        return None
 
 
 def _load_bgr(path: Path) -> np.ndarray | None:
@@ -204,15 +230,20 @@ def _minmax_norm(values: list[float]) -> list[float]:
 
 def score_groups(settings: Settings | None = None) -> dict:
     settings = settings or get_settings()
-    landmarker = _get_landmarker(settings.models_dir)
 
     with get_db(settings.db_path) as conn:
         groups = conn.execute("SELECT group_id FROM groups").fetchall()
         group_ids = [g["group_id"] for g in groups]
 
     if not group_ids:
-        console.print("[yellow]No groups to score. Run `photo-organiser group` first.[/yellow]")
+        console.print(
+            "[yellow]No groups to score. "
+            "Check `photo-organiser group` output — if groups=0, lower "
+            "time/global cosine thresholds or confirm embeddings exist.[/yellow]"
+        )
         return {"scored_groups": 0}
+
+    landmarker = _get_landmarker(settings.models_dir)
 
     scored = 0
     with Progress(

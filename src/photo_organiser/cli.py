@@ -201,13 +201,29 @@ def pipeline_cmd(
     from photo_organiser.safety import apply_exclusions
     from photo_organiser.score import score_groups
 
+    from photo_organiser.db import get_db
+    from photo_organiser.config import get_settings
+
     apply_exclusions()
     if not skip_embed:
         embed()
-    build_groups()
+    group_stats = build_groups()
+    if not group_stats.get("groups"):
+        console.print(
+            "[yellow]Pipeline stopped: 0 duplicate groups found. "
+            "Scoring/review need groups. Try lowering thresholds or "
+            "confirm `embed` covered your library.[/yellow]"
+        )
+        return
     fetch_sync(kind="preview", only_group_members=True)
     score_groups()
-    console.print("[green]Pipeline done. Next: photo-organiser review[/green]")
+    settings = get_settings()
+    with get_db(settings.db_path) as conn:
+        n = conn.execute("SELECT COUNT(*) AS c FROM groups").fetchone()["c"]
+    console.print(
+        f"[green]Pipeline done ({n} groups). Next: "
+        "uv run photo-organiser review[/green]"
+    )
 
 
 def main() -> None:
