@@ -126,6 +126,7 @@
     }
     button.primary { background: var(--good); color: #0f1115; border-color: transparent; font-weight: 700; }
     button.keep-all { background: transparent; color: var(--accent); border-color: var(--accent); }
+    button.delete-all { background: transparent; color: #f07178; border-color: #f07178; }
     button:disabled { opacity: 0.4; cursor: not-allowed; }
   </style>
 </head>
@@ -141,7 +142,8 @@
   <div class="help">
     Click a photo (or press <kbd>1</kbd>–<kbd>9</kbd>) to choose the keeper, then
     <kbd>A</kbd> / <kbd>Enter</kbd> to keep that one and trash the rest.
-    <kbd>K</kbd> keeps the <strong>entire group</strong> (not duplicates).
+    <kbd>K</kbd> keeps the <strong>entire group</strong> ·
+    <kbd>D</kbd> deletes <strong>all</strong> (favorites stay).
     <kbd>S</kbd> skips for later · <kbd>N</kbd> next without deciding.
   </div>
   <div id="empty" hidden>No pending groups. Run grouping + scoring, or you're done.</div>
@@ -150,6 +152,7 @@
   <footer>
     <button class="primary" id="btn-accept">Keep selection (A)</button>
     <button class="keep-all" id="btn-keep-all">Keep all photos (K)</button>
+    <button class="delete-all" id="btn-delete-all">Delete all (D)</button>
     <button id="btn-skip">Skip for later (S)</button>
   </footer>
 
@@ -240,6 +243,13 @@
         alert('Select a photo to keep first (click a card or press 1–9).');
         return;
       }
+      if (action === 'delete_all') {
+        const n = current.members.length;
+        const ok = confirm(
+          `Delete all ${n} photo(s) in this group?\nFavorites and excluded items are skipped.`
+        );
+        if (!ok) return;
+      }
       const body = { action };
       if (action === 'accept' || action === 'override') {
         body.keep_media_key = selected;
@@ -262,6 +272,7 @@
 
     document.getElementById('btn-accept').onclick = () => decide('accept');
     document.getElementById('btn-keep-all').onclick = () => decide('keep_all');
+    document.getElementById('btn-delete-all').onclick = () => decide('delete_all');
     document.getElementById('btn-skip').onclick = () => decide('skip');
 
     window.addEventListener('keydown', (e) => {
@@ -270,6 +281,7 @@
       if (e.target && ['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
       if (e.key === 'a' || e.key === 'A' || e.key === 'Enter') decide('accept');
       else if (e.key === 'k' || e.key === 'K') decide('keep_all');
+      else if (e.key === 'd' || e.key === 'D') decide('delete_all');
       else if (e.key === 's' || e.key === 'S') decide('skip');
       else if (e.key === 'n' || e.key === 'N') loadGroup(null);
       else if (e.key >= '1' && e.key <= '9') {

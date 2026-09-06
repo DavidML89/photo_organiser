@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS groups (
     group_id TEXT PRIMARY KEY,
     size INTEGER NOT NULL,
     proposed_keeper TEXT,
-    status TEXT DEFAULT 'pending',  -- pending | accepted | overridden | skipped | kept_all
+    status TEXT DEFAULT 'pending',  -- pending | accepted | overridden | skipped | kept_all | deleted_all
     override_keeper TEXT,
     reviewed_at TEXT
 );

@@ -157,7 +157,7 @@ async def media(media_key: str, kind: str = "preview"):
 @app.post("/api/group/{group_id}/decide")
 async def decide(group_id: str, request: Request):
     body = await request.json()
-    action = body.get("action")  # accept | override | skip | keep_all
+    action = body.get("action")  # accept | override | skip | keep_all | delete_all
     keep_media_key = body.get("keep_media_key")
 
     settings = get_settings()
@@ -179,6 +179,39 @@ async def decide(group_id: str, request: Request):
         now = datetime.now(timezone.utc).isoformat()
         member_keys = {m["media_key"] for m in members}
 
+        def write_decision(
+            status: str,
+            keep: str,
+            trash: list[str],
+            *,
+            override_keeper: str | None = None,
+        ) -> dict:
+            conn.execute(
+                """
+                UPDATE groups SET status=?, override_keeper=?, reviewed_at=?
+                WHERE group_id=?
+                """,
+                (status, override_keeper, now, group_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO decisions(group_id, keep_media_key, trash_dedup_keys, decided_at, applied)
+                VALUES(?, ?, ?, ?, 0)
+                ON CONFLICT(group_id) DO UPDATE SET
+                    keep_media_key=excluded.keep_media_key,
+                    trash_dedup_keys=excluded.trash_dedup_keys,
+                    decided_at=excluded.decided_at,
+                    applied=0
+                """,
+                (group_id, keep, json.dumps(trash), now),
+            )
+            return {
+                "ok": True,
+                "status": status,
+                "keep": keep or None,
+                "trash_count": len(trash),
+            }
+
         if action == "skip":
             # Leave for later — no trash decision written.
             conn.execute(
@@ -189,30 +222,20 @@ async def decide(group_id: str, request: Request):
 
         if action == "keep_all":
             # False positive / keep every photo — explicit empty trash list.
-            keep = g["proposed_keeper"] or (members[0]["media_key"] if members else None)
-            status = "kept_all"
-            trash: list[str] = []
-            conn.execute(
-                """
-                UPDATE groups SET status=?, override_keeper=NULL, reviewed_at=?
-                WHERE group_id=?
-                """,
-                (status, now, group_id),
-            )
-            if keep:
-                conn.execute(
-                    """
-                    INSERT INTO decisions(group_id, keep_media_key, trash_dedup_keys, decided_at, applied)
-                    VALUES(?, ?, ?, ?, 0)
-                    ON CONFLICT(group_id) DO UPDATE SET
-                        keep_media_key=excluded.keep_media_key,
-                        trash_dedup_keys=excluded.trash_dedup_keys,
-                        decided_at=excluded.decided_at,
-                        applied=0
-                    """,
-                    (group_id, keep, json.dumps(trash), now),
-                )
-            return {"ok": True, "status": status, "keep": keep, "trash_count": 0}
+            keep = g["proposed_keeper"] or (members[0]["media_key"] if members else "")
+            return write_decision("kept_all", keep, [])
+
+        if action == "delete_all":
+            # Trash every deletable member. Favorites / excluded stay.
+            trash = []
+            protected: list[str] = []
+            for m in members:
+                if m["is_favorite"] or m["excluded"]:
+                    protected.append(m["media_key"])
+                    continue
+                trash.append(m["dedup_key"])
+            keep = protected[0] if protected else ""
+            return write_decision("deleted_all", keep, trash)
 
         # accept / override — keep exactly one selected photo
         if action in ("accept", "override"):
@@ -239,32 +262,12 @@ async def decide(group_id: str, request: Request):
                 continue
             trash.append(m["dedup_key"])
 
-        conn.execute(
-            """
-            UPDATE groups SET status=?, override_keeper=?, reviewed_at=?
-            WHERE group_id=?
-            """,
-            (
-                status,
-                keep if status == "overridden" else None,
-                now,
-                group_id,
-            ),
+        return write_decision(
+            status,
+            keep,
+            trash,
+            override_keeper=keep if status == "overridden" else None,
         )
-        conn.execute(
-            """
-            INSERT INTO decisions(group_id, keep_media_key, trash_dedup_keys, decided_at, applied)
-            VALUES(?, ?, ?, ?, 0)
-            ON CONFLICT(group_id) DO UPDATE SET
-                keep_media_key=excluded.keep_media_key,
-                trash_dedup_keys=excluded.trash_dedup_keys,
-                decided_at=excluded.decided_at,
-                applied=0
-            """,
-            (group_id, keep, json.dumps(trash), now),
-        )
-
-    return {"ok": True, "status": status, "keep": keep, "trash_count": len(trash)}
 
 
 def run_server(host: str | None = None, port: int | None = None) -> None:
