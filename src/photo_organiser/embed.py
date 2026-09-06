@@ -13,6 +13,7 @@ from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, T
 from photo_organiser.config import Settings, get_settings
 from photo_organiser.db import get_db
 from photo_organiser.device import DeviceInfo, resolve_device
+from photo_organiser.images import describe_file_head, looks_like_image_file
 from photo_organiser.paths import thumb_path
 
 console = Console()
@@ -123,24 +124,27 @@ def embed(
         console.print("[green]Nothing to embed.[/green]")
         return {"embedded": 0, "failed": 0, "device": device.kind}
 
-    # Spot-check that cached thumbs actually exist on disk
-    missing = 0
+    # Spot-check that cached thumbs are real images (not HTML error pages)
+    bad = 0
     sample_errors: list[str] = []
     for mk in keys[:50]:
         path = thumb_path(mk, settings.thumbs_dir)
-        if not path.exists() or path.stat().st_size == 0:
-            missing += 1
-            if len(sample_errors) < 5:
-                sample_errors.append(f"missing/empty: {path}")
-    if missing >= 25:
+        if looks_like_image_file(path):
+            continue
+        bad += 1
+        if len(sample_errors) < 5:
+            detail = describe_file_head(path) if path.exists() else "missing"
+            sample_errors.append(f"{path.name}: {detail}")
+    if bad >= 25:
         console.print(
-            f"[red]Thumb files missing on disk ({missing}/50 sampled). "
-            f"DB says thumb_cached=1 but files are not at {settings.thumbs_dir}.[/red]"
+            f"[red]Thumb files not valid images ({bad}/50 sampled). "
+            f"DB says thumb_cached=1 under {settings.thumbs_dir} — often HTML "
+            f"interstitials from a non-browser User-Agent.[/red]"
         )
         for line in sample_errors:
             console.print(f"  [dim]{line}[/dim]")
         console.print(
-            "[yellow]Fix: reset flags and re-download thumbs:[/yellow]\n"
+            "[yellow]Fix: delete bad files, re-download, then embed:[/yellow]\n"
             "  uv run photo-organiser fetch thumbs --repair\n"
             "  uv run photo-organiser embed"
         )
@@ -148,7 +152,7 @@ def embed(
             "embedded": 0,
             "failed": len(keys),
             "device": device.kind,
-            "thumbs_missing": True,
+            "thumbs_invalid": True,
         }
 
     console.print(f"Embedding {len(keys)} images (batch={batch_size})")

@@ -11,9 +11,16 @@ from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, T
 
 from photo_organiser.config import Settings, get_settings
 from photo_organiser.db import get_db
+from photo_organiser.images import describe_file_head, looks_like_image_bytes, looks_like_image_file
 from photo_organiser.paths import preview_path, sized_thumb_url, thumb_path
 
 console = Console()
+
+# Googleusercontent often rejects non-browser UAs with an HTML interstitial.
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
 
 
 async def _download_one(
@@ -22,8 +29,11 @@ async def _download_one(
     dest: Path,
     retries: int,
 ) -> bool:
-    if dest.exists() and dest.stat().st_size > 0:
+    if dest.exists() and looks_like_image_file(dest):
         return True
+    if dest.exists():
+        dest.unlink(missing_ok=True)
+
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".partial")
     last_err: Exception | None = None
@@ -33,7 +43,14 @@ async def _download_one(
             if resp.status_code == 404:
                 return False
             resp.raise_for_status()
-            tmp.write_bytes(resp.content)
+            content = resp.content
+            if not looks_like_image_bytes(content):
+                ctype = resp.headers.get("content-type", "?")
+                preview = content[:80].decode("utf-8", errors="replace").replace("\n", " ")
+                raise ValueError(
+                    f"not an image (content-type={ctype}, head={preview[:60]!r})"
+                )
+            tmp.write_bytes(content)
             tmp.replace(dest)
             return True
         except Exception as exc:  # noqa: BLE001
@@ -60,8 +77,8 @@ async def fetch_images(
         only_group_members: For previews, only fetch photos that are in a group.
         limit: Optional max items (useful for smoke tests).
         verify_urls: If >0, fetch that many and stop — used to verify no-auth claim.
-        repair: If True, clear ``*_cached`` flags when the file is missing on disk,
-            then download those again.
+        repair: If True, clear ``*_cached`` flags when the file is missing or not a
+            valid image, delete bad files, then download again.
     """
     settings = settings or get_settings()
     size = settings.thumb_size if kind == "thumb" else settings.preview_size
@@ -71,6 +88,7 @@ async def fetch_images(
 
     if repair:
         repaired = 0
+        sample_bad: list[str] = []
         with get_db(settings.db_path) as conn:
             rows = conn.execute(
                 f"""
@@ -80,16 +98,23 @@ async def fetch_images(
             ).fetchall()
             for r in rows:
                 dest = path_fn(r["media_key"], root)
-                if not dest.exists() or dest.stat().st_size == 0:
-                    conn.execute(
-                        f"UPDATE photos SET {flag_col}=0 WHERE media_key=?",
-                        (r["media_key"],),
-                    )
-                    repaired += 1
+                if looks_like_image_file(dest):
+                    continue
+                if dest.exists() and len(sample_bad) < 5:
+                    sample_bad.append(f"{dest.name}: {describe_file_head(dest)}")
+                if dest.exists():
+                    dest.unlink(missing_ok=True)
+                conn.execute(
+                    f"UPDATE photos SET {flag_col}=0 WHERE media_key=?",
+                    (r["media_key"],),
+                )
+                repaired += 1
         console.print(
             f"[cyan]Repair:[/cyan] cleared {repaired} stale {flag_col} flags "
-            f"(file missing under {root})"
+            f"(missing or not a valid image under {root})"
         )
+        for line in sample_bad:
+            console.print(f"  [dim]{line}[/dim]")
 
     with get_db(settings.db_path) as conn:
         if only_group_members and kind == "preview":
@@ -129,7 +154,7 @@ async def fetch_images(
     async with httpx.AsyncClient(
         timeout=settings.fetch_timeout_s,
         follow_redirects=True,
-        headers={"User-Agent": "photo-organiser/0.1"},
+        headers={"User-Agent": _BROWSER_UA},
     ) as client:
 
         async def worker(media_key: str, thumb: str) -> None:
@@ -171,10 +196,14 @@ async def fetch_images(
         sample = items[0] if items else None
         if sample:
             dest = path_fn(sample[0], root)
+            ok_img = looks_like_image_file(dest)
             console.print(
                 f"[cyan]Verify sample:[/cyan] {sized_thumb_url(sample[1], size)}\n"
-                f"  saved={dest.exists()} size={dest.stat().st_size if dest.exists() else 0}"
+                f"  saved={dest.exists()} size={dest.stat().st_size if dest.exists() else 0} "
+                f"valid_image={ok_img}"
             )
+            if dest.exists() and not ok_img:
+                console.print(f"  [yellow]head: {describe_file_head(dest)}[/yellow]")
 
     result = {"kind": kind, "requested": len(items), "ok": ok, "failed": failed}
     console.print(result)

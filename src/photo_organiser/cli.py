@@ -87,7 +87,7 @@ def fetch_thumbs(
     repair: bool = typer.Option(
         False,
         "--repair",
-        help="Clear thumb_cached when the file is missing on disk, then re-download",
+        help="Clear thumb_cached when missing/corrupt/non-image, then re-download",
     ),
 ) -> None:
     """Fetch 256px thumbnails for grouping."""

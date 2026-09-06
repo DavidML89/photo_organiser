@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from photo_organiser.group import UnionFind
+from photo_organiser.images import looks_like_image_bytes
 from photo_organiser.paths import hashed_subdir, sized_thumb_url
 from photo_organiser.score import _minmax_norm, exposure_score, sharpness_score
 
@@ -15,6 +16,13 @@ def test_sized_thumb_url_strips_and_resizes():
     assert out.startswith("https://lh3.googleusercontent.com/abc=")
     assert "w256-h256-k-no" in out
     assert "authuser=0" in out
+
+
+def test_looks_like_image_bytes():
+    assert looks_like_image_bytes(b"\xff\xd8\xff" + b"\x00" * 20)
+    assert looks_like_image_bytes(b"RIFF" + b"\x00" * 4 + b"WEBP" + b"\x00" * 8)
+    assert not looks_like_image_bytes(b"<!DOCTYPE html><html>")
+    assert not looks_like_image_bytes(b"short")
 
 
 def test_hashed_subdir_fanout(tmp_path):

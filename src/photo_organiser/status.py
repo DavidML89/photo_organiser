@@ -7,13 +7,14 @@ from rich.table import Table
 
 from photo_organiser.config import Settings, get_settings
 from photo_organiser.db import get_db
+from photo_organiser.images import looks_like_image_file
 from photo_organiser.paths import thumb_path
 
 console = Console()
 
 
 def _sample_thumbs_on_disk(conn, thumbs_dir, sample_size: int = 50) -> tuple[int, int]:
-    """Return (present, sampled) for a random-ish sample of thumb_cached rows."""
+    """Return (valid_images, sampled) for thumb_cached rows (magic-byte check)."""
     rows = conn.execute(
         """
         SELECT media_key FROM photos
@@ -27,7 +28,7 @@ def _sample_thumbs_on_disk(conn, thumbs_dir, sample_size: int = 50) -> tuple[int
     present = 0
     for r in rows:
         path = thumb_path(r["media_key"], thumbs_dir)
-        if path.exists() and path.stat().st_size > 0:
+        if looks_like_image_file(path):
             present += 1
     return present, len(rows)
 
@@ -92,7 +93,8 @@ def status(settings: Settings | None = None) -> dict:
     elif thumbs_missing:
         console.print(
             f"[red]DB says thumbs_cached={stats['thumbs_cached']} but only "
-            f"{on_disk}/{sampled} sampled files exist under {settings.thumbs_dir}.[/red]\n"
+            f"{on_disk}/{sampled} sampled files are valid images under "
+            f"{settings.thumbs_dir} (missing or HTML/corrupt).[/red]\n"
             "[yellow]Next: re-download → "
             "`uv run photo-organiser fetch thumbs --repair`[/yellow]"
         )
