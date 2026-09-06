@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeRemainingColumn
 
 from photo_organiser.config import Settings, get_settings
+from photo_organiser.cookies import cookies_look_usable, load_netscape_cookies
 from photo_organiser.db import get_db
 from photo_organiser.images import describe_file_head, looks_like_image_bytes, looks_like_image_file
 from photo_organiser.paths import preview_path, sized_thumb_url, thumb_path
@@ -22,43 +23,68 @@ _BROWSER_UA = (
     "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 )
 
+_AUTH_HELP = """
+[red]Google Photos CDN returned 403 / non-image HTML.[/red]
+Thumb URLs now require your logged-in session cookies.
+
+1. Install Chrome extension [Get cookies.txt LOCALLY]
+2. Open https://photos.google.com while logged in
+3. Export cookies → save as ~/.gpdedupe/cookies.txt
+4. Re-run:
+     uv run photo-organiser fetch thumbs --repair --cookies ~/.gpdedupe/cookies.txt
+
+Keep the cookies file private. Prefer a dedicated/incognito session (see docs).
+""".strip()
+
 
 async def _download_one(
     client: httpx.AsyncClient,
     url: str,
     dest: Path,
     retries: int,
-) -> bool:
+) -> tuple[bool, str | None]:
+    """Return (ok, error_kind) where error_kind is None | '403' | 'other'."""
     if dest.exists() and looks_like_image_file(dest):
-        return True
+        return True, None
     if dest.exists():
         dest.unlink(missing_ok=True)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".partial")
     last_err: Exception | None = None
+    saw_403 = False
     for attempt in range(1, retries + 1):
         try:
             resp = await client.get(url)
             if resp.status_code == 404:
-                return False
+                return False, "other"
+            if resp.status_code == 403:
+                saw_403 = True
+                raise httpx.HTTPStatusError(
+                    f"Client error '403 Forbidden' for url '{url}'",
+                    request=resp.request,
+                    response=resp,
+                )
             resp.raise_for_status()
             content = resp.content
             if not looks_like_image_bytes(content):
                 ctype = resp.headers.get("content-type", "?")
                 preview = content[:80].decode("utf-8", errors="replace").replace("\n", " ")
+                head = content[:64].lower()
+                if b"<!doctype" in head or b"<html" in head:
+                    saw_403 = True
                 raise ValueError(
                     f"not an image (content-type={ctype}, head={preview[:60]!r})"
                 )
             tmp.write_bytes(content)
             tmp.replace(dest)
-            return True
+            return True, None
         except Exception as exc:  # noqa: BLE001
             last_err = exc
             await asyncio.sleep(min(2**attempt, 16))
     if last_err:
         console.print(f"[yellow]Failed {dest.name}: {last_err}[/yellow]")
-    return False
+    return False, ("403" if saw_403 else "other")
 
 
 async def fetch_images(
@@ -68,6 +94,7 @@ async def fetch_images(
     limit: int | None = None,
     verify_urls: int = 0,
     repair: bool = False,
+    cookies: Path | None = None,
     settings: Settings | None = None,
 ) -> dict:
     """Fetch 256px thumbs or 1600px previews.
@@ -76,15 +103,37 @@ async def fetch_images(
         kind: ``thumb`` or ``preview``.
         only_group_members: For previews, only fetch photos that are in a group.
         limit: Optional max items (useful for smoke tests).
-        verify_urls: If >0, fetch that many and stop — used to verify no-auth claim.
+        verify_urls: If >0, fetch that many and stop — used to verify auth.
         repair: If True, clear ``*_cached`` flags when the file is missing or not a
             valid image, delete bad files, then download again.
+        cookies: Optional Netscape cookies.txt (Google Photos session).
     """
     settings = settings or get_settings()
     size = settings.thumb_size if kind == "thumb" else settings.preview_size
     root = settings.thumbs_dir if kind == "thumb" else settings.previews_dir
     flag_col = "thumb_cached" if kind == "thumb" else "preview_cached"
     path_fn = thumb_path if kind == "thumb" else preview_path
+
+    cookies_path = Path(cookies) if cookies else settings.cookies_path
+    cookie_jar = None
+    if cookies_path.is_file():
+        cookie_jar = load_netscape_cookies(cookies_path)
+        present = cookies_look_usable(cookie_jar)
+        console.print(
+            f"[cyan]Cookies:[/cyan] {cookies_path} "
+            f"({len(list(cookie_jar))} cookies; session markers={present or 'none'})"
+        )
+        if not present:
+            console.print(
+                "[yellow]Warning: no SID/SAPISID-style cookies found — "
+                "export while logged into photos.google.com.[/yellow]"
+            )
+    else:
+        console.print(
+            f"[yellow]No cookies file at {cookies_path}. "
+            "Google Photos CDN usually returns 403 without a session — "
+            "pass --cookies PATH after exporting cookies.txt.[/yellow]"
+        )
 
     if repair:
         repaired = 0
@@ -149,25 +198,48 @@ async def fetch_images(
     sem = asyncio.Semaphore(settings.fetch_concurrency)
     ok = 0
     failed = 0
+    auth_fails = 0
     ok_keys: list[str] = []
+    stop = False
 
-    async with httpx.AsyncClient(
-        timeout=settings.fetch_timeout_s,
-        follow_redirects=True,
-        headers={"User-Agent": _BROWSER_UA},
-    ) as client:
+    client_kwargs: dict = {
+        "timeout": settings.fetch_timeout_s,
+        "follow_redirects": True,
+        "headers": {
+            "User-Agent": _BROWSER_UA,
+            "Referer": "https://photos.google.com/",
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        },
+    }
+    if cookie_jar is not None:
+        client_kwargs["cookies"] = cookie_jar
+
+    async with httpx.AsyncClient(**client_kwargs) as client:
 
         async def worker(media_key: str, thumb: str) -> None:
-            nonlocal ok, failed
+            nonlocal ok, failed, auth_fails, stop
+            if stop:
+                failed += 1
+                return
             url = sized_thumb_url(thumb, size)
             dest = path_fn(media_key, root)
             async with sem:
-                success = await _download_one(client, url, dest, settings.fetch_retries)
+                if stop:
+                    failed += 1
+                    return
+                success, err_kind = await _download_one(
+                    client, url, dest, settings.fetch_retries
+                )
             if success:
                 ok += 1
                 ok_keys.append(media_key)
+                auth_fails = 0
             else:
                 failed += 1
+                if err_kind == "403":
+                    auth_fails += 1
+                    if auth_fails >= 8 and ok == 0:
+                        stop = True
 
         with Progress(
             TextColumn("[progress.description]{task.description}"),
@@ -182,7 +254,15 @@ async def fetch_images(
                 await worker(media_key, thumb)
                 progress.advance(task)
 
-            await asyncio.gather(*(tracked(mk, th) for mk, th in items))
+            chunk = max(settings.fetch_concurrency * 4, 64)
+            for i in range(0, len(items), chunk):
+                if stop:
+                    remaining = len(items) - i
+                    failed += remaining
+                    progress.advance(task, remaining)
+                    break
+                batch = items[i : i + chunk]
+                await asyncio.gather(*(tracked(mk, th) for mk, th in batch))
 
     if ok_keys:
         with get_db(settings.db_path) as conn:
@@ -207,6 +287,8 @@ async def fetch_images(
 
     result = {"kind": kind, "requested": len(items), "ok": ok, "failed": failed}
     console.print(result)
+    if stop or (ok == 0 and failed and auth_fails):
+        console.print(_AUTH_HELP)
     return result
 
 

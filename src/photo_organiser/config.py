@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     fetch_concurrency: int = 16
     fetch_retries: int = 4
     fetch_timeout_s: float = 30.0
+    # Netscape cookies.txt from a logged-in photos.google.com session.
+    # Required for CDN thumb downloads (403 without it).
+    cookies_file: Path | None = None
 
     # Embedding
     dinov2_model: str = "facebook/dinov2-base"
@@ -96,6 +99,10 @@ class Settings(BaseSettings):
     @property
     def logs_dir(self) -> Path:
         return self.data_root / "logs"
+
+    @property
+    def cookies_path(self) -> Path:
+        return self.cookies_file if self.cookies_file else self.data_root / "cookies.txt"
 
     def ensure_dirs(self) -> None:
         for path in (

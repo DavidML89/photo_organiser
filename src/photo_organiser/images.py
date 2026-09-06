@@ -44,9 +44,8 @@ def describe_file_head(path: Path, n: int = 60) -> str:
         return f"<unreadable: {exc}>"
     try:
         text = raw.decode("utf-8", errors="replace").replace("\n", " ")
-        if text.lstrip().lower().startswith("<!DOCTYPE") or text.lstrip().lower().startswith(
-            "<html"
-        ):
+        lowered = text.lstrip().lower()
+        if lowered.startswith("<!doctype") or lowered.startswith("<html"):
             return f"HTML: {text[:50]!r}…"
     except Exception:  # noqa: BLE001
         pass

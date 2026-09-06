@@ -89,11 +89,22 @@ def fetch_thumbs(
         "--repair",
         help="Clear thumb_cached when missing/corrupt/non-image, then re-download",
     ),
+    cookies: Optional[Path] = typer.Option(
+        None,
+        "--cookies",
+        help="Netscape cookies.txt from a logged-in photos.google.com session",
+    ),
 ) -> None:
-    """Fetch 256px thumbnails for grouping."""
+    """Fetch 256px thumbnails for grouping (needs Google session cookies)."""
     from photo_organiser.fetch import fetch_sync
 
-    fetch_sync(kind="thumb", limit=limit, verify_urls=verify, repair=repair)
+    fetch_sync(
+        kind="thumb",
+        limit=limit,
+        verify_urls=verify,
+        repair=repair,
+        cookies=cookies,
+    )
 
 
 @fetch_app.command("previews")
@@ -102,11 +113,21 @@ def fetch_previews(
     all_photos: bool = typer.Option(
         False, "--all", help="Fetch for all photos, not only group members"
     ),
+    cookies: Optional[Path] = typer.Option(
+        None,
+        "--cookies",
+        help="Netscape cookies.txt from a logged-in photos.google.com session",
+    ),
 ) -> None:
     """Fetch 1600px previews (group members only by default)."""
     from photo_organiser.fetch import fetch_sync
 
-    fetch_sync(kind="preview", only_group_members=not all_photos, limit=limit)
+    fetch_sync(
+        kind="preview",
+        only_group_members=not all_photos,
+        limit=limit,
+        cookies=cookies,
+    )
 
 
 @app.command("embed")

@@ -16,6 +16,7 @@ data/
 *.db-wal
 *.db-shm
 census.jsonl
+cookies.txt
 *.npy
 *.npz
 embeddings/
