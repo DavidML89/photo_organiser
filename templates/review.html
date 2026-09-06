@@ -114,6 +114,7 @@
       background: rgba(26,29,36,0.95);
       border-top: 1px solid var(--border);
       backdrop-filter: blur(8px);
+      z-index: 10;
     }
     button {
       background: #2a2f38;
@@ -128,6 +129,36 @@
     button.keep-all { background: transparent; color: var(--accent); border-color: var(--accent); }
     button.delete-all { background: transparent; color: #f07178; border-color: #f07178; }
     button:disabled { opacity: 0.4; cursor: not-allowed; }
+    #lightbox {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: rgba(0, 0, 0, 0.92);
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+      padding: 24px;
+    }
+    #lightbox.open { display: flex; }
+    #lightbox img {
+      max-width: min(96vw, 1800px);
+      max-height: calc(100vh - 88px);
+      object-fit: contain;
+      background: #111;
+      border-radius: 4px;
+    }
+    #lightbox .lb-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    #lightbox .lb-bar a { color: var(--accent); }
+    #lightbox .lb-hint { font-size: 12px; color: #777; }
   </style>
 </head>
 <body>
@@ -140,32 +171,92 @@
     </div>
   </header>
   <div class="help">
-    Click a photo (or press <kbd>1</kbd>–<kbd>9</kbd>) to choose the keeper, then
-    <kbd>A</kbd> / <kbd>Enter</kbd> to keep that one and trash the rest.
-    <kbd>K</kbd> keeps the <strong>entire group</strong> ·
-    <kbd>D</kbd> deletes <strong>all</strong> (favorites stay).
-    <kbd>S</kbd> skips for later · <kbd>N</kbd> next without deciding.
+    Click to select keeper · double-click or <kbd>Space</kbd> / <kbd>V</kbd> to view large ·
+    <kbd>A</kbd> / <kbd>Enter</kbd> keep selection · <kbd>K</kbd> keep all ·
+    <kbd>D</kbd> delete all · <kbd>S</kbd> skip · <kbd>N</kbd> next ·
+    <kbd>Esc</kbd> closes viewer · <kbd>←</kbd>/<kbd>→</kbd> while viewing.
   </div>
   <div id="empty" hidden>No pending groups. Run grouping + scoring, or you're done.</div>
   <div id="done" hidden>All groups reviewed. Export with <code>photo-organiser apply export</code>.</div>
   <div id="grid"></div>
+  <div id="lightbox" aria-hidden="true">
+    <img id="lb-img" alt="large preview" />
+    <div class="lb-bar">
+      <span id="lb-label"></span>
+      <a id="lb-gphotos" href="#" target="_blank" rel="noopener">Open in Google Photos</a>
+      <button type="button" id="lb-close">Close (Esc)</button>
+    </div>
+    <div class="lb-hint">Largest available size (~4K via CDN or local preview — not Takeout originals)</div>
+  </div>
   <footer>
     <button class="primary" id="btn-accept">Keep selection (A)</button>
     <button class="keep-all" id="btn-keep-all">Keep all photos (K)</button>
     <button class="delete-all" id="btn-delete-all">Delete all (D)</button>
     <button id="btn-skip">Skip for later (S)</button>
+    <button id="btn-view">View large (Space)</button>
   </footer>
 
   <script>
     let current = null;
     let selected = null;
+    let lbIndex = -1;
     const initial = {{ initial_group_id|tojson }};
 
     const grid = document.getElementById('grid');
     const empty = document.getElementById('empty');
     const done = document.getElementById('done');
+    const lightbox = document.getElementById('lightbox');
+    const lbImg = document.getElementById('lb-img');
+    const lbLabel = document.getElementById('lb-label');
+    const lbGphotos = document.getElementById('lb-gphotos');
+
+    function lightboxOpen() {
+      return lightbox.classList.contains('open');
+    }
+
+    function closeLightbox() {
+      lightbox.classList.remove('open');
+      lightbox.setAttribute('aria-hidden', 'true');
+      lbImg.removeAttribute('src');
+      lbIndex = -1;
+    }
+
+    function openLightbox(mediaKey) {
+      if (!current) return;
+      const idx = current.members.findIndex((m) => m.media_key === mediaKey);
+      if (idx < 0) return;
+      lbIndex = idx;
+      selected = mediaKey;
+      const m = current.members[idx];
+      const s = m.score || {};
+      lbLabel.textContent =
+        `#${idx + 1} · ${m.res_width || '?'}×${m.res_height || '?'} · score ${(s.total || 0).toFixed(3)}`;
+      lbGphotos.href = `https://photos.google.com/photo/${encodeURIComponent(m.media_key)}`;
+      lbImg.onerror = () => {
+        if (lbImg.dataset.stage === 'full') {
+          lbImg.dataset.stage = 'preview';
+          lbImg.src = `/media/${encodeURIComponent(m.media_key)}?kind=preview`;
+        } else if (lbImg.dataset.stage === 'preview') {
+          lbImg.dataset.stage = 'thumb';
+          lbImg.src = `/media/${encodeURIComponent(m.media_key)}?kind=thumb`;
+        }
+      };
+      lbImg.dataset.stage = 'full';
+      lbImg.src = `/media/${encodeURIComponent(m.media_key)}?kind=full`;
+      lightbox.classList.add('open');
+      lightbox.setAttribute('aria-hidden', 'false');
+      render();
+    }
+
+    function stepLightbox(delta) {
+      if (!current || !lightboxOpen()) return;
+      const n = current.members.length;
+      if (!n) return;
+      openLightbox(current.members[(lbIndex + delta + n) % n].media_key);
+    }
 
     async function loadGroup(id) {
+      closeLightbox();
       const url = id ? `/api/group/${id}` : '/api/group/next';
       const res = await fetch(url);
       const data = await res.json();
@@ -198,11 +289,14 @@
           selected = m.media_key;
           render();
         };
+        card.ondblclick = (e) => {
+          e.preventDefault();
+          openLightbox(m.media_key);
+        };
         const img = document.createElement('img');
         img.src = `/media/${encodeURIComponent(m.media_key)}?kind=preview`;
         img.alt = m.media_key;
         img.onerror = () => {
-          // Fall back to thumb if preview missing
           if (!img.dataset.fellback) {
             img.dataset.fellback = '1';
             img.src = `/media/${encodeURIComponent(m.media_key)}?kind=thumb`;
@@ -235,6 +329,7 @@
         grid.appendChild(card);
       });
       document.getElementById('btn-accept').disabled = !selected;
+      document.getElementById('btn-view').disabled = !selected;
     }
 
     async function decide(action) {
@@ -274,12 +369,27 @@
     document.getElementById('btn-keep-all').onclick = () => decide('keep_all');
     document.getElementById('btn-delete-all').onclick = () => decide('delete_all');
     document.getElementById('btn-skip').onclick = () => decide('skip');
+    document.getElementById('btn-view').onclick = () => {
+      if (selected) openLightbox(selected);
+    };
+    document.getElementById('lb-close').onclick = closeLightbox;
+    lightbox.addEventListener('click', (e) => {
+      if (e.target === lightbox) closeLightbox();
+    });
 
     window.addEventListener('keydown', (e) => {
-      if (!current) return;
-      // Ignore when typing in inputs (future-proof)
       if (e.target && ['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
-      if (e.key === 'a' || e.key === 'A' || e.key === 'Enter') decide('accept');
+      if (lightboxOpen()) {
+        if (e.key === 'Escape') { closeLightbox(); return; }
+        if (e.key === 'ArrowLeft') { stepLightbox(-1); return; }
+        if (e.key === 'ArrowRight') { stepLightbox(1); return; }
+      }
+      if (!current) return;
+      if (e.key === ' ' || e.key === 'v' || e.key === 'V') {
+        e.preventDefault();
+        if (selected) openLightbox(selected);
+      } else if (e.key === 'Escape') closeLightbox();
+      else if (e.key === 'a' || e.key === 'A' || e.key === 'Enter') decide('accept');
       else if (e.key === 'k' || e.key === 'K') decide('keep_all');
       else if (e.key === 'd' || e.key === 'D') decide('delete_all');
       else if (e.key === 's' || e.key === 'S') decide('skip');
@@ -289,6 +399,7 @@
         if (current.members[idx]) {
           selected = current.members[idx].media_key;
           render();
+          if (lightboxOpen()) openLightbox(selected);
         }
       }
     });

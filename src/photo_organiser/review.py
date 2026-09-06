@@ -6,15 +6,18 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from photo_organiser.config import get_settings
+from photo_organiser.cookies import load_netscape_cookies
 from photo_organiser.db import get_db
+from photo_organiser.images import looks_like_image_bytes, looks_like_image_file
 from photo_organiser.models import GroupMemberView, GroupView, ScoreBreakdown
-from photo_organiser.paths import preview_path, thumb_path
+from photo_organiser.paths import full_path, large_media_url, preview_path, thumb_path
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent.parent
 TEMPLATES_DIR = PACKAGE_ROOT / "templates"
@@ -139,9 +142,68 @@ async def api_group(group_id: str):
     return view.model_dump()
 
 
+async def _ensure_full_cached(media_key: str) -> Path | None:
+    """Return a large local image: cache → CDN fetch → preview → thumb."""
+    settings = get_settings()
+    dest = full_path(media_key, settings.fulls_dir)
+    if dest.exists() and looks_like_image_file(dest):
+        return dest
+
+    preview = preview_path(media_key, settings.previews_dir)
+    thumb = thumb_path(media_key, settings.thumbs_dir)
+
+    with get_db(settings.db_path) as conn:
+        row = conn.execute(
+            "SELECT thumb FROM photos WHERE media_key=?", (media_key,)
+        ).fetchone()
+    thumb_url = row["thumb"] if row else None
+
+    cookies_file = settings.cookies_path
+    if thumb_url and cookies_file.exists():
+        jar = load_netscape_cookies(cookies_file)
+        url = large_media_url(thumb_url, settings.full_size)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(dest.suffix + ".partial")
+        try:
+            async with httpx.AsyncClient(
+                cookies=jar,
+                follow_redirects=True,
+                timeout=60.0,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/122.0.0.0 Safari/537.36"
+                    ),
+                    "Referer": "https://photos.google.com/",
+                },
+            ) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                if looks_like_image_bytes(resp.content):
+                    tmp.write_bytes(resp.content)
+                    tmp.replace(dest)
+                    return dest
+        except Exception:  # noqa: BLE001 — fall back to smaller local cache
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+
+    if preview.exists() and looks_like_image_file(preview):
+        return preview
+    if thumb.exists() and looks_like_image_file(thumb):
+        return thumb
+    return None
+
+
 @app.get("/media/{media_key}")
 async def media(media_key: str, kind: str = "preview"):
     settings = get_settings()
+    if kind == "full":
+        path = await _ensure_full_cached(media_key)
+        if not path:
+            raise HTTPException(404, "media not cached")
+        return FileResponse(path, media_type="image/jpeg")
+
     path = (
         preview_path(media_key, settings.previews_dir)
         if kind == "preview"

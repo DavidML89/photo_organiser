@@ -21,6 +21,10 @@ def preview_path(media_key: str, previews_dir: Path) -> Path:
     return hashed_subdir(media_key, previews_dir, ".jpg")
 
 
+def full_path(media_key: str, fulls_dir: Path) -> Path:
+    return hashed_subdir(media_key, fulls_dir, ".jpg")
+
+
 def sized_thumb_url(thumb_url: str, size: int) -> str:
     """Rewrite a Google Photos thumb URL to a fixed size without auth.
 
@@ -30,3 +34,8 @@ def sized_thumb_url(thumb_url: str, size: int) -> str:
         return thumb_url
     base = thumb_url.split("=")[0].split("?")[0]
     return f"{base}=w{size}-h{size}-k-no?authuser=0"
+
+
+def large_media_url(thumb_url: str, size: int = 4096) -> str:
+    """Near-original display size from the GPTK thumb URL (not a Takeout file)."""
+    return sized_thumb_url(thumb_url, size)

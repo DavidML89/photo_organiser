@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     # Thumbnail sizes
     thumb_size: int = 256
     preview_size: int = 1600
+    full_size: int = 4096
 
     # Fetch
     fetch_concurrency: int = 16
@@ -85,6 +86,10 @@ class Settings(BaseSettings):
         return self.data_root / "previews"
 
     @property
+    def fulls_dir(self) -> Path:
+        return self.data_root / "fulls"
+
+    @property
     def embeddings_dir(self) -> Path:
         return self.data_root / "embeddings"
 
@@ -109,6 +114,7 @@ class Settings(BaseSettings):
             self.data_root,
             self.thumbs_dir,
             self.previews_dir,
+            self.fulls_dir,
             self.embeddings_dir,
             self.undo_dir,
             self.models_dir,
