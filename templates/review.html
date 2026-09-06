@@ -41,6 +41,7 @@
       font-size: 12px;
       color: var(--muted);
       border-bottom: 1px solid var(--border);
+      line-height: 1.5;
     }
     .help kbd {
       background: #2a2f38;
@@ -53,7 +54,7 @@
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
       gap: 12px;
-      padding: 16px 20px 80px;
+      padding: 16px 20px 96px;
     }
     .card {
       background: var(--panel);
@@ -107,6 +108,7 @@
       left: 0;
       right: 0;
       display: flex;
+      flex-wrap: wrap;
       gap: 8px;
       padding: 12px 20px;
       background: rgba(26,29,36,0.95);
@@ -123,7 +125,7 @@
       cursor: pointer;
     }
     button.primary { background: var(--good); color: #0f1115; border-color: transparent; font-weight: 700; }
-    button.danger { background: transparent; color: var(--bad); border-color: var(--bad); }
+    button.keep-all { background: transparent; color: var(--accent); border-color: var(--accent); }
     button:disabled { opacity: 0.4; cursor: not-allowed; }
   </style>
 </head>
@@ -137,18 +139,18 @@
     </div>
   </header>
   <div class="help">
-    <kbd>A</kbd> accept proposed keeper ·
-    <kbd>1</kbd>–<kbd>9</kbd> pick card as keeper (override) ·
-    <kbd>S</kbd> skip ·
-    <kbd>N</kbd> next · click a card to select
+    Click a photo (or press <kbd>1</kbd>–<kbd>9</kbd>) to choose the keeper, then
+    <kbd>A</kbd> / <kbd>Enter</kbd> to keep that one and trash the rest.
+    <kbd>K</kbd> keeps the <strong>entire group</strong> (not duplicates).
+    <kbd>S</kbd> skips for later · <kbd>N</kbd> next without deciding.
   </div>
   <div id="empty" hidden>No pending groups. Run grouping + scoring, or you're done.</div>
   <div id="done" hidden>All groups reviewed. Export with <code>photo-organiser apply export</code>.</div>
   <div id="grid"></div>
   <footer>
-    <button class="primary" id="btn-accept">Accept keeper (A)</button>
-    <button id="btn-override" disabled>Override with selection (Enter)</button>
-    <button id="btn-skip">Skip (S)</button>
+    <button class="primary" id="btn-accept">Keep selection (A)</button>
+    <button class="keep-all" id="btn-keep-all">Keep all photos (K)</button>
+    <button id="btn-skip">Skip for later (S)</button>
   </footer>
 
   <script>
@@ -175,13 +177,14 @@
       done.hidden = true;
       empty.hidden = true;
       current = data;
-      selected = data.proposed_keeper;
+      selected = data.proposed_keeper || (data.members[0] && data.members[0].media_key);
       document.getElementById('gid').textContent = data.group_id;
       render();
     }
 
     function render() {
       grid.innerHTML = '';
+      if (!current) return;
       current.members.forEach((m, idx) => {
         const card = document.createElement('div');
         card.className = 'card' +
@@ -190,17 +193,23 @@
         card.dataset.key = m.media_key;
         card.onclick = () => {
           selected = m.media_key;
-          document.getElementById('btn-override').disabled = selected === current.proposed_keeper;
           render();
         };
         const img = document.createElement('img');
         img.src = `/media/${encodeURIComponent(m.media_key)}?kind=preview`;
         img.alt = m.media_key;
+        img.onerror = () => {
+          // Fall back to thumb if preview missing
+          if (!img.dataset.fellback) {
+            img.dataset.fellback = '1';
+            img.src = `/media/${encodeURIComponent(m.media_key)}?kind=thumb`;
+          }
+        };
         card.appendChild(img);
         if (m.is_proposed_keeper) {
           const b = document.createElement('div');
           b.className = 'badge';
-          b.textContent = 'KEEPER';
+          b.textContent = 'PROPOSED';
           card.appendChild(b);
         }
         if (m.is_favorite) {
@@ -212,8 +221,9 @@
         const meta = document.createElement('div');
         meta.className = 'meta';
         const s = m.score || {};
+        const mark = selected === m.media_key ? ' · selected' : '';
         meta.innerHTML = `
-          <div class="total">#${idx + 1} · score ${(s.total || 0).toFixed(3)}</div>
+          <div class="total">#${idx + 1} · score ${(s.total || 0).toFixed(3)}${mark}</div>
           <div>${m.res_width || '?'}×${m.res_height || '?'}</div>
           <div>sharp ${(s.sharpness||0).toFixed(2)} · eyes ${(s.eyes||0).toFixed(2)} · smile ${(s.smile||0).toFixed(2)}</div>
           <div>expo ${(s.exposure||0).toFixed(2)} · aes ${(s.aesthetic||0).toFixed(2)}</div>
@@ -221,14 +231,19 @@
         card.appendChild(meta);
         grid.appendChild(card);
       });
-      document.getElementById('btn-override').disabled =
-        !selected || selected === current.proposed_keeper;
+      document.getElementById('btn-accept').disabled = !selected;
     }
 
     async function decide(action) {
       if (!current) return;
+      if ((action === 'accept' || action === 'override') && !selected) {
+        alert('Select a photo to keep first (click a card or press 1–9).');
+        return;
+      }
       const body = { action };
-      if (action === 'override') body.keep_media_key = selected;
+      if (action === 'accept' || action === 'override') {
+        body.keep_media_key = selected;
+      }
       const res = await fetch(`/api/group/${current.group_id}/decide`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -246,17 +261,18 @@
     }
 
     document.getElementById('btn-accept').onclick = () => decide('accept');
-    document.getElementById('btn-override').onclick = () => decide('override');
+    document.getElementById('btn-keep-all').onclick = () => decide('keep_all');
     document.getElementById('btn-skip').onclick = () => decide('skip');
 
     window.addEventListener('keydown', (e) => {
       if (!current) return;
-      if (e.key === 'a' || e.key === 'A') decide('accept');
+      // Ignore when typing in inputs (future-proof)
+      if (e.target && ['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      if (e.key === 'a' || e.key === 'A' || e.key === 'Enter') decide('accept');
+      else if (e.key === 'k' || e.key === 'K') decide('keep_all');
       else if (e.key === 's' || e.key === 'S') decide('skip');
       else if (e.key === 'n' || e.key === 'N') loadGroup(null);
-      else if (e.key === 'Enter') {
-        if (selected && selected !== current.proposed_keeper) decide('override');
-      } else if (e.key >= '1' && e.key <= '9') {
+      else if (e.key >= '1' && e.key <= '9') {
         const idx = parseInt(e.key, 10) - 1;
         if (current.members[idx]) {
           selected = current.members[idx].media_key;
@@ -266,9 +282,7 @@
     });
 
     if (initial) loadGroup(initial);
-    else {
-      empty.hidden = false;
-    }
+    else empty.hidden = false;
   </script>
 </body>
 </html>

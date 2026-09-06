@@ -157,7 +157,7 @@ async def media(media_key: str, kind: str = "preview"):
 @app.post("/api/group/{group_id}/decide")
 async def decide(group_id: str, request: Request):
     body = await request.json()
-    action = body.get("action")  # accept | override | skip
+    action = body.get("action")  # accept | override | skip | keep_all
     keep_media_key = body.get("keep_media_key")
 
     settings = get_settings()
@@ -176,21 +176,58 @@ async def decide(group_id: str, request: Request):
             (group_id,),
         ).fetchall()
 
+        now = datetime.now(timezone.utc).isoformat()
+        member_keys = {m["media_key"] for m in members}
+
         if action == "skip":
+            # Leave for later — no trash decision written.
             conn.execute(
                 "UPDATE groups SET status='skipped', reviewed_at=? WHERE group_id=?",
-                (datetime.now(timezone.utc).isoformat(), group_id),
+                (now, group_id),
             )
-            return {"ok": True, "status": "skipped"}
+            return {"ok": True, "status": "skipped", "trash_count": 0}
 
-        if action == "accept":
+        if action == "keep_all":
+            # False positive / keep every photo — explicit empty trash list.
             keep = g["proposed_keeper"] or (members[0]["media_key"] if members else None)
-            status = "accepted"
-        elif action == "override":
-            keep = keep_media_key
-            status = "overridden"
+            status = "kept_all"
+            trash: list[str] = []
+            conn.execute(
+                """
+                UPDATE groups SET status=?, override_keeper=NULL, reviewed_at=?
+                WHERE group_id=?
+                """,
+                (status, now, group_id),
+            )
+            if keep:
+                conn.execute(
+                    """
+                    INSERT INTO decisions(group_id, keep_media_key, trash_dedup_keys, decided_at, applied)
+                    VALUES(?, ?, ?, ?, 0)
+                    ON CONFLICT(group_id) DO UPDATE SET
+                        keep_media_key=excluded.keep_media_key,
+                        trash_dedup_keys=excluded.trash_dedup_keys,
+                        decided_at=excluded.decided_at,
+                        applied=0
+                    """,
+                    (group_id, keep, json.dumps(trash), now),
+                )
+            return {"ok": True, "status": status, "keep": keep, "trash_count": 0}
+
+        # accept / override — keep exactly one selected photo
+        if action in ("accept", "override"):
+            keep = keep_media_key or g["proposed_keeper"]
+            if not keep and members:
+                keep = members[0]["media_key"]
             if not keep:
-                raise HTTPException(400, "keep_media_key required for override")
+                raise HTTPException(400, "no keeper available")
+            if keep not in member_keys:
+                raise HTTPException(400, "keep_media_key is not in this group")
+            status = (
+                "accepted"
+                if keep == g["proposed_keeper"]
+                else "overridden"
+            )
         else:
             raise HTTPException(400, f"unknown action {action}")
 
@@ -210,7 +247,7 @@ async def decide(group_id: str, request: Request):
             (
                 status,
                 keep if status == "overridden" else None,
-                datetime.now(timezone.utc).isoformat(),
+                now,
                 group_id,
             ),
         )
@@ -224,12 +261,7 @@ async def decide(group_id: str, request: Request):
                 decided_at=excluded.decided_at,
                 applied=0
             """,
-            (
-                group_id,
-                keep,
-                json.dumps(trash),
-                datetime.now(timezone.utc).isoformat(),
-            ),
+            (group_id, keep, json.dumps(trash), now),
         )
 
     return {"ok": True, "status": status, "keep": keep, "trash_count": len(trash)}
