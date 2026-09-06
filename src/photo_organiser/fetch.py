@@ -24,16 +24,18 @@ _BROWSER_UA = (
 )
 
 _AUTH_HELP = """
-[red]Google Photos CDN returned 403 / non-image HTML.[/red]
-Thumb URLs now require your logged-in session cookies.
+[red]Google Photos CDN returned HTML/403 — stale thumb URLs cannot be fetched from Python.[/red]
 
-1. Install Chrome extension [Get cookies.txt LOCALLY]
-2. Open https://photos.google.com while logged in
-3. Export cookies → save as ~/.gpdedupe/cookies.txt
-4. Re-run:
-     uv run photo-organiser fetch thumbs --repair --cookies ~/.gpdedupe/cookies.txt
+Census thumb tokens expire. Cookies alone are not enough.
 
-Keep the cookies file private. Prefer a dedicated/incognito session (see docs).
+[bold]Recommended path (fresh thumbs in the browser):[/bold]
+1. Open https://photos.google.com (logged in, GPTK installed)
+2. Paste [cyan]browser/fetch_thumbs.js[/cyan] into the DevTools console
+3. Wait for [cyan]thumbs_batch_*.zip[/cyan] downloads
+4. Import:
+     uv run photo-organiser fetch thumbs --import-zips ~/Downloads
+
+Tip: set LIMIT=20 at the top of fetch_thumbs.js for a smoke test first.
 """.strip()
 
 
@@ -294,3 +296,110 @@ async def fetch_images(
 
 def fetch_sync(**kwargs) -> dict:
     return asyncio.run(fetch_images(**kwargs))
+
+
+def import_thumb_zips(
+    zips_dir: Path,
+    *,
+    settings: Settings | None = None,
+) -> dict:
+    """Import thumbs_batch_*.zip from the browser script into the local cache."""
+    import zipfile
+
+    settings = settings or get_settings()
+    root = settings.thumbs_dir
+    root.mkdir(parents=True, exist_ok=True)
+
+    paths = sorted(zips_dir.expanduser().resolve().glob("thumbs_batch_*.zip"))
+    if not paths:
+        # Also accept any *.zip in the directory
+        paths = sorted(zips_dir.expanduser().resolve().glob("*.zip"))
+    if not paths:
+        console.print(f"[red]No zip files found in {zips_dir}[/red]")
+        return {"zips": 0, "ok": 0, "skipped": 0, "unknown": 0}
+
+    ok = 0
+    skipped = 0
+    unknown = 0
+    ok_keys: list[str] = []
+
+    console.print(f"Importing {len(paths)} zip(s) from {zips_dir} → {root}")
+
+    with get_db(settings.db_path) as conn:
+        known = {
+            r["media_key"]
+            for r in conn.execute("SELECT media_key FROM photos WHERE is_video=0").fetchall()
+        }
+
+    for zp in paths:
+        console.print(f"  [dim]{zp.name}[/dim]")
+        with zipfile.ZipFile(zp, "r") as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                name = Path(info.filename).name
+                if not name.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                    continue
+                media_key = name.rsplit(".", 1)[0]
+                if media_key not in known:
+                    unknown += 1
+                    continue
+                dest = thumb_path(media_key, root)
+                if dest.exists() and looks_like_image_file(dest):
+                    skipped += 1
+                    continue
+                data = zf.read(info)
+                if not looks_like_image_bytes(data):
+                    unknown += 1
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(data)
+                ok += 1
+                ok_keys.append(media_key)
+
+    if ok_keys:
+        with get_db(settings.db_path) as conn:
+            for media_key in ok_keys:
+                conn.execute(
+                    "UPDATE photos SET thumb_cached=1 WHERE media_key=?",
+                    (media_key,),
+                )
+
+    result = {
+        "zips": len(paths),
+        "ok": ok,
+        "skipped": skipped,
+        "unknown_or_bad": unknown,
+    }
+    console.print(result)
+    if ok:
+        console.print(
+            f"[green]Imported {ok} thumbs.[/green] Next: "
+            "`uv run photo-organiser status` then `uv run photo-organiser embed`"
+        )
+    return result
+
+
+def scan_thumbs_dir(*, settings: Settings | None = None) -> dict:
+    """Mark thumb_cached=1 for DB rows whose hashed thumb file is a valid image."""
+    settings = settings or get_settings()
+    root = settings.thumbs_dir
+    marked = 0
+    missing = 0
+    with get_db(settings.db_path) as conn:
+        rows = conn.execute(
+            "SELECT media_key FROM photos WHERE is_video=0 AND thumb_cached=0"
+        ).fetchall()
+        for r in rows:
+            dest = thumb_path(r["media_key"], root)
+            if looks_like_image_file(dest):
+                conn.execute(
+                    "UPDATE photos SET thumb_cached=1 WHERE media_key=?",
+                    (r["media_key"],),
+                )
+                marked += 1
+            else:
+                missing += 1
+    result = {"marked": marked, "still_missing": missing}
+    console.print(result)
+    return result

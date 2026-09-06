@@ -15,12 +15,18 @@ See the full guide:
 - [Epic](../docs/epics/photo-organiser/PHOTO_ORGANISER_EPIC.md)
 
 ```bash
-# On the Yoga (Windows) or Mac
+# On the Yoga (Windows/WSL) or Mac
 uv sync
 uv pip install torch torchvision transformers timm   # see setup docs for CUDA index
-photo-organiser init
-# … then follow the census → fetch → embed → group → score → review → apply flow
+uv run photo-organiser init
+# 1) browser/census.js → census import
+# 2) browser/fetch_thumbs.js → fetch thumbs --import-zips ~/Downloads
+# 3) embed → group → score → review → apply
 ```
+
+**Thumbs:** do **not** rely on `fetch thumbs --cookies` — census CDN URLs expire and
+return HTML. Use `browser/fetch_thumbs.js` on photos.google.com, then
+`--import-zips`.
 
 ## License
 

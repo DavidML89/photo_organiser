@@ -92,12 +92,28 @@ def fetch_thumbs(
     cookies: Optional[Path] = typer.Option(
         None,
         "--cookies",
-        help="Netscape cookies.txt from a logged-in photos.google.com session",
+        help="Netscape cookies.txt (usually insufficient — prefer browser fetch_thumbs.js)",
+    ),
+    import_zips: Optional[Path] = typer.Option(
+        None,
+        "--import-zips",
+        help="Import thumbs_batch_*.zip produced by browser/fetch_thumbs.js",
+    ),
+    scan: bool = typer.Option(
+        False,
+        "--scan",
+        help="Mark thumb_cached for valid images already under the thumbs dir",
     ),
 ) -> None:
-    """Fetch 256px thumbnails for grouping (needs Google session cookies)."""
-    from photo_organiser.fetch import fetch_sync
+    """Fetch or import 256px thumbnails for grouping."""
+    from photo_organiser.fetch import fetch_sync, import_thumb_zips, scan_thumbs_dir
 
+    if import_zips is not None:
+        import_thumb_zips(import_zips)
+        return
+    if scan:
+        scan_thumbs_dir()
+        return
     fetch_sync(
         kind="thumb",
         limit=limit,
