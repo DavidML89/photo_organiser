@@ -1,8 +1,10 @@
 /**
- * Download fresh 256px thumbnails while logged into Google Photos.
+ * Fallback: download fresh 256px thumbnails while logged into Google Photos.
  *
- * Why: census thumb URLs expire. Python + cookies.txt alone gets HTML/403.
- * This script uses your live browser session + fresh GPTK URLs.
+ * Prefer first: export ALL cookies from photos.google.com, then
+ *   uv run photo-organiser fetch thumbs --cookies ~/.gpdedupe/cookies.txt
+ *
+ * Use this script only if cookies still return HTML/403.
  *
  * Prerequisites:
  *   1. Tampermonkey + Google Photos Toolkit (gptkApi)

@@ -92,12 +92,12 @@ def fetch_thumbs(
     cookies: Optional[Path] = typer.Option(
         None,
         "--cookies",
-        help="Netscape cookies.txt (usually insufficient — prefer browser fetch_thumbs.js)",
+        help="Netscape cookies.txt — export ALL cookies while on photos.google.com",
     ),
     import_zips: Optional[Path] = typer.Option(
         None,
         "--import-zips",
-        help="Import thumbs_batch_*.zip produced by browser/fetch_thumbs.js",
+        help="Fallback: import thumbs_batch_*.zip from browser/fetch_thumbs.js",
     ),
     scan: bool = typer.Option(
         False,

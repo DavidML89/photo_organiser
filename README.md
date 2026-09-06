@@ -20,13 +20,13 @@ uv sync
 uv pip install torch torchvision transformers timm   # see setup docs for CUDA index
 uv run photo-organiser init
 # 1) browser/census.js → census import
-# 2) browser/fetch_thumbs.js → fetch thumbs --import-zips ~/Downloads
+# 2) export ALL cookies from photos.google.com → fetch thumbs --cookies …
 # 3) embed → group → score → review → apply
 ```
 
-**Thumbs:** do **not** rely on `fetch thumbs --cookies` — census CDN URLs expire and
-return HTML. Use `browser/fetch_thumbs.js` on photos.google.com, then
-`--import-zips`.
+**Thumbs:** export **all** cookies (not a filtered subset) while on
+photos.google.com, then `uv run photo-organiser fetch thumbs --cookies ~/.gpdedupe/cookies.txt`.
+Fallback: `browser/fetch_thumbs.js` + `--import-zips`.
 
 ## License
 

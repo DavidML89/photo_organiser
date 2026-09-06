@@ -24,18 +24,20 @@ _BROWSER_UA = (
 )
 
 _AUTH_HELP = """
-[red]Google Photos CDN returned HTML/403 — stale thumb URLs cannot be fetched from Python.[/red]
+[red]Google Photos CDN returned HTML/403.[/red]
 
-Census thumb tokens expire. Cookies alone are not enough.
+Usually the cookies file is incomplete (need a full export, not a filtered subset).
 
-[bold]Recommended path (fresh thumbs in the browser):[/bold]
-1. Open https://photos.google.com (logged in, GPTK installed)
-2. Paste [cyan]browser/fetch_thumbs.js[/cyan] into the DevTools console
-3. Wait for [cyan]thumbs_batch_*.zip[/cyan] downloads
-4. Import:
-     uv run photo-organiser fetch thumbs --import-zips ~/Downloads
+[bold]Fix — re-export ALL cookies:[/bold]
+1. Install Chrome extension [Get cookies.txt LOCALLY]
+2. Open https://photos.google.com while logged in
+3. Export [bold]all[/bold] cookies → save as ~/.gpdedupe/cookies.txt
+4. Re-run:
+     uv run photo-organiser fetch thumbs --verify 5 --cookies ~/.gpdedupe/cookies.txt
+     uv run photo-organiser fetch thumbs --repair --cookies ~/.gpdedupe/cookies.txt
 
-Tip: set LIMIT=20 at the top of fetch_thumbs.js for a smoke test first.
+[bold]Fallback[/bold] if cookies still fail: paste browser/fetch_thumbs.js on
+photos.google.com, then --import-zips ~/Downloads.
 """.strip()
 
 
@@ -130,11 +132,17 @@ async def fetch_images(
                 "[yellow]Warning: no SID/SAPISID-style cookies found — "
                 "export while logged into photos.google.com.[/yellow]"
             )
+        elif len(list(cookie_jar)) < 40:
+            console.print(
+                "[yellow]Warning: cookie file looks small. "
+                "Export [bold]all[/bold] cookies (not a filtered subset) "
+                "from photos.google.com.[/yellow]"
+            )
     else:
         console.print(
             f"[yellow]No cookies file at {cookies_path}. "
-            "Google Photos CDN usually returns 403 without a session — "
-            "pass --cookies PATH after exporting cookies.txt.[/yellow]"
+            "Export ALL cookies from photos.google.com, then:\n"
+            "  uv run photo-organiser fetch thumbs --cookies ~/.gpdedupe/cookies.txt[/yellow]"
         )
 
     if repair:
