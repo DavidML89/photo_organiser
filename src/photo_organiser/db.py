@@ -98,6 +98,15 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS corrupt_flags (
+    media_key TEXT PRIMARY KEY REFERENCES photos(media_key) ON DELETE CASCADE,
+    corrupted INTEGER NOT NULL DEFAULT 0,
+    reasons TEXT,
+    fill_fraction REAL,
+    fill_color TEXT,
+    scanned_at TEXT NOT NULL
+);
 """
 
 

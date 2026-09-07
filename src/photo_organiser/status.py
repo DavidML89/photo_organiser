@@ -76,6 +76,9 @@ def status(settings: Settings | None = None) -> dict:
                 """
             ),
             "groups": count("SELECT COUNT(*) AS c FROM groups"),
+            "corrupt_thumbs": count(
+                "SELECT COUNT(*) AS c FROM corrupt_flags WHERE corrupted=1"
+            ),
         }
 
     table = Table(title="Pipeline status")

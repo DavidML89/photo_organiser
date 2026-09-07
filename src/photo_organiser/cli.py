@@ -18,9 +18,11 @@ console = Console()
 census_app = typer.Typer(help="Import / report library census")
 fetch_app = typer.Typer(help="Download thumbnails and previews")
 apply_app = typer.Typer(help="Export trash / restore payloads")
+corrupt_app = typer.Typer(help="Find truncated / corrupt recovered photos")
 app.add_typer(census_app, name="census")
 app.add_typer(fetch_app, name="fetch")
 app.add_typer(apply_app, name="apply")
+app.add_typer(corrupt_app, name="corrupt")
 
 
 @app.callback()
@@ -202,6 +204,54 @@ def dry_run_cmd() -> None:
     from photo_organiser.safety import dry_run_report
 
     dry_run_report()
+
+
+@corrupt_app.command("scan")
+def corrupt_scan_cmd(
+    root: Path = typer.Argument(..., exists=True, file_okay=False, help="Folder of recovered photos"),
+    move_to: Optional[Path] = typer.Option(
+        None, "--move-to", help="Move corrupt files here, keeping relative paths"
+    ),
+    copy_to: Optional[Path] = typer.Option(
+        None, "--copy-to", help="Copy corrupt files here instead of moving"
+    ),
+    report: Optional[Path] = typer.Option(None, "--report", help="Write JSONL verdicts"),
+    min_fill: float = typer.Option(
+        0.12,
+        "--min-fill",
+        help="Trailing uniform-row fraction that flags generic fill (decoder gray uses 0.08)",
+    ),
+    limit: Optional[int] = typer.Option(None, help="Max files to inspect"),
+) -> None:
+    """Detect truncated JPEGs (grey block / glitch bands) and optionally sort them."""
+    from photo_organiser.corrupt import scan_tree
+
+    scan_tree(
+        root,
+        move_to=move_to,
+        copy_to=copy_to,
+        report=report,
+        min_fill=min_fill,
+        limit=limit,
+    )
+
+
+@corrupt_app.command("thumbs")
+def corrupt_thumbs_cmd(
+    report: Optional[Path] = typer.Option(
+        None, "--report", help="JSONL path (default: data_root/corrupt_thumbs.jsonl)"
+    ),
+    min_fill: float = typer.Option(
+        0.12,
+        "--min-fill",
+        help="Trailing uniform-row fraction that flags generic fill (decoder gray uses 0.08)",
+    ),
+    limit: Optional[int] = typer.Option(None, help="Max thumbs to inspect"),
+) -> None:
+    """Scan cached Google Photos thumbs for recovery truncation (grey-block JPEGs)."""
+    from photo_organiser.corrupt import scan_thumbs
+
+    scan_thumbs(report=report, min_fill=min_fill, limit=limit)
 
 
 @app.command("review")
