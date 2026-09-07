@@ -63,6 +63,7 @@
       overflow: hidden;
       cursor: pointer;
       position: relative;
+      user-select: none;
     }
     .card.keeper { border-color: var(--good); }
     .card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
@@ -171,7 +172,8 @@
     </div>
   </header>
   <div class="help">
-    Click to select keeper · double-click or <kbd>Space</kbd> / <kbd>V</kbd> to view large ·
+    Click to select keeper · Ctrl/⌘-click add · Shift-click range ·
+    double-click or <kbd>Space</kbd> / <kbd>V</kbd> to view large ·
     <kbd>A</kbd> / <kbd>Enter</kbd> keep selection · <kbd>K</kbd> keep all ·
     <kbd>D</kbd> delete all · <kbd>S</kbd> skip · <kbd>N</kbd> next ·
     <kbd>Esc</kbd> closes viewer · <kbd>←</kbd>/<kbd>→</kbd> while viewing.
@@ -198,7 +200,8 @@
 
   <script>
     let current = null;
-    let selected = null;
+    let selected = [];
+    let lastIndex = -1;
     let lbIndex = -1;
     const initial = {{ initial_group_id|tojson }};
 
@@ -221,16 +224,71 @@
       lbIndex = -1;
     }
 
+    function isSelected(key) {
+      return selected.includes(key);
+    }
+
+    function focusedKey() {
+      if (lastIndex >= 0 && current && current.members[lastIndex]) {
+        return current.members[lastIndex].media_key;
+      }
+      return selected[0] || null;
+    }
+
+    function uniqueKeys(keys) {
+      const seen = new Set();
+      const out = [];
+      for (const key of keys) {
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(key);
+      }
+      return out;
+    }
+
+    function setSingle(idx) {
+      const m = current.members[idx];
+      if (!m) return;
+      selected = [m.media_key];
+      lastIndex = idx;
+    }
+
+    function toggleKey(idx) {
+      const m = current.members[idx];
+      if (!m) return;
+      if (isSelected(m.media_key)) {
+        if (selected.length === 1) return;
+        selected = selected.filter((k) => k !== m.media_key);
+      } else {
+        selected = selected.concat(m.media_key);
+      }
+      lastIndex = idx;
+    }
+
+    function selectRange(idx) {
+      const anchor = lastIndex >= 0 ? lastIndex : idx;
+      const lo = Math.min(anchor, idx);
+      const hi = Math.max(anchor, idx);
+      selected = uniqueKeys(current.members.slice(lo, hi + 1).map((m) => m.media_key));
+    }
+
+    function applyCardClick(idx, e) {
+      if (e.shiftKey) selectRange(idx);
+      else if (e.metaKey || e.ctrlKey) toggleKey(idx);
+      else setSingle(idx);
+      render();
+    }
+
     function openLightbox(mediaKey) {
       if (!current) return;
       const idx = current.members.findIndex((m) => m.media_key === mediaKey);
       if (idx < 0) return;
       lbIndex = idx;
-      selected = mediaKey;
       const m = current.members[idx];
       const s = m.score || {};
+      const keepMark = isSelected(m.media_key) ? ' · keep' : '';
       lbLabel.textContent =
-        `#${idx + 1} · ${m.res_width || '?'}×${m.res_height || '?'} · score ${(s.total || 0).toFixed(3)}`;
+        `#${idx + 1} · ${m.res_width || '?'}×${m.res_height || '?'} · score ${(s.total || 0).toFixed(3)}${keepMark}`;
       lbGphotos.href = `https://photos.google.com/photo/${encodeURIComponent(m.media_key)}`;
       lbImg.onerror = () => {
         if (lbImg.dataset.stage === 'full') {
@@ -245,7 +303,6 @@
       lbImg.src = `/media/${encodeURIComponent(m.media_key)}?kind=full`;
       lightbox.classList.add('open');
       lightbox.setAttribute('aria-hidden', 'false');
-      render();
     }
 
     function stepLightbox(delta) {
@@ -262,6 +319,8 @@
       const data = await res.json();
       if (data.done) {
         current = null;
+        selected = [];
+        lastIndex = -1;
         grid.innerHTML = '';
         done.hidden = false;
         empty.hidden = true;
@@ -271,7 +330,9 @@
       done.hidden = true;
       empty.hidden = true;
       current = data;
-      selected = data.proposed_keeper || (data.members[0] && data.members[0].media_key);
+      const initialKey = data.proposed_keeper || (data.members[0] && data.members[0].media_key);
+      selected = initialKey ? [initialKey] : [];
+      lastIndex = current.members.findIndex((m) => m.media_key === initialKey);
       document.getElementById('gid').textContent = data.group_id;
       render();
     }
@@ -283,12 +344,12 @@
         const card = document.createElement('div');
         card.className = 'card' +
           (m.is_proposed_keeper ? ' keeper' : '') +
-          (selected === m.media_key ? ' selected' : '');
+          (isSelected(m.media_key) ? ' selected' : '');
         card.dataset.key = m.media_key;
-        card.onclick = () => {
-          selected = m.media_key;
-          render();
+        card.onmousedown = (e) => {
+          if (e.shiftKey || e.ctrlKey || e.metaKey) e.preventDefault();
         };
+        card.onclick = (e) => applyCardClick(idx, e);
         card.ondblclick = (e) => {
           e.preventDefault();
           openLightbox(m.media_key);
@@ -318,7 +379,7 @@
         const meta = document.createElement('div');
         meta.className = 'meta';
         const s = m.score || {};
-        const mark = selected === m.media_key ? ' · selected' : '';
+        const mark = isSelected(m.media_key) ? ' · keep' : '';
         meta.innerHTML = `
           <div class="total">#${idx + 1} · score ${(s.total || 0).toFixed(3)}${mark}</div>
           <div>${m.res_width || '?'}×${m.res_height || '?'}</div>
@@ -328,13 +389,16 @@
         card.appendChild(meta);
         grid.appendChild(card);
       });
-      document.getElementById('btn-accept').disabled = !selected;
-      document.getElementById('btn-view').disabled = !selected;
+      const n = selected.length;
+      const btnAccept = document.getElementById('btn-accept');
+      btnAccept.disabled = n === 0;
+      btnAccept.textContent = n > 1 ? `Keep ${n} photos (A)` : 'Keep selection (A)';
+      document.getElementById('btn-view').disabled = n === 0;
     }
 
     async function decide(action) {
       if (!current) return;
-      if ((action === 'accept' || action === 'override') && !selected) {
+      if ((action === 'accept' || action === 'override') && !selected.length) {
         alert('Select a photo to keep first (click a card or press 1–9).');
         return;
       }
@@ -347,7 +411,8 @@
       }
       const body = { action };
       if (action === 'accept' || action === 'override') {
-        body.keep_media_key = selected;
+        body.keep_media_keys = selected.slice();
+        body.keep_media_key = selected[0];
       }
       const res = await fetch(`/api/group/${current.group_id}/decide`, {
         method: 'POST',
@@ -370,7 +435,8 @@
     document.getElementById('btn-delete-all').onclick = () => decide('delete_all');
     document.getElementById('btn-skip').onclick = () => decide('skip');
     document.getElementById('btn-view').onclick = () => {
-      if (selected) openLightbox(selected);
+      const key = focusedKey();
+      if (key) openLightbox(key);
     };
     document.getElementById('lb-close').onclick = closeLightbox;
     lightbox.addEventListener('click', (e) => {
@@ -387,20 +453,19 @@
       if (!current) return;
       if (e.key === ' ' || e.key === 'v' || e.key === 'V') {
         e.preventDefault();
-        if (selected) openLightbox(selected);
+        const key = focusedKey();
+        if (key) openLightbox(key);
       } else if (e.key === 'Escape') closeLightbox();
-      else if (e.key === 'a' || e.key === 'A' || e.key === 'Enter') decide('accept');
+      else if ((e.key === 'a' || e.key === 'A' || e.key === 'Enter') && !e.metaKey && !e.ctrlKey) decide('accept');
       else if (e.key === 'k' || e.key === 'K') decide('keep_all');
       else if (e.key === 'd' || e.key === 'D') decide('delete_all');
       else if (e.key === 's' || e.key === 'S') decide('skip');
       else if (e.key === 'n' || e.key === 'N') loadGroup(null);
       else if (e.key >= '1' && e.key <= '9') {
         const idx = parseInt(e.key, 10) - 1;
-        if (current.members[idx]) {
-          selected = current.members[idx].media_key;
-          render();
-          if (lightboxOpen()) openLightbox(selected);
-        }
+        if (!current.members[idx]) return;
+        applyCardClick(idx, e);
+        if (lightboxOpen()) openLightbox(current.members[idx].media_key);
       }
     });
 

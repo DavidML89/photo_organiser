@@ -19,6 +19,51 @@ from photo_organiser.images import looks_like_image_bytes, looks_like_image_file
 from photo_organiser.models import GroupMemberView, GroupView, ScoreBreakdown
 from photo_organiser.paths import full_path, large_media_url, preview_path, thumb_path
 
+
+def resolve_keep_decision(
+    members: list,
+    keep_keys: list[str],
+    proposed_keeper: str | None,
+) -> dict:
+    """Keep every listed member; trash the rest (except favorites/excluded)."""
+    member_keys = [m["media_key"] for m in members]
+    known = set(member_keys)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for key in keep_keys:
+        if not key or key in seen:
+            continue
+        if key not in known:
+            raise ValueError("keep_media_key is not in this group")
+        ordered.append(key)
+        seen.add(key)
+    if not ordered:
+        raise ValueError("no keeper available")
+
+    keep_set = set(ordered)
+    primary = proposed_keeper if proposed_keeper in keep_set else ordered[0]
+    if keep_set == set(member_keys):
+        return {
+            "status": "kept_all",
+            "keep": primary,
+            "trash": [],
+            "override_keeper": None,
+        }
+
+    trash = [
+        m["dedup_key"]
+        for m in members
+        if m["media_key"] not in keep_set and not m["is_favorite"] and not m["excluded"]
+    ]
+    status = "accepted" if keep_set == {proposed_keeper} else "overridden"
+    return {
+        "status": status,
+        "keep": primary,
+        "trash": trash,
+        "override_keeper": primary if status == "overridden" else None,
+    }
+
+
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent.parent
 TEMPLATES_DIR = PACKAGE_ROOT / "templates"
 STATIC_DIR = PACKAGE_ROOT / "static"
@@ -239,7 +284,6 @@ async def decide(group_id: str, request: Request):
         ).fetchall()
 
         now = datetime.now(timezone.utc).isoformat()
-        member_keys = {m["media_key"] for m in members}
 
         def write_decision(
             status: str,
@@ -299,36 +343,25 @@ async def decide(group_id: str, request: Request):
             keep = protected[0] if protected else ""
             return write_decision("deleted_all", keep, trash)
 
-        # accept / override — keep exactly one selected photo
-        if action in ("accept", "override"):
-            keep = keep_media_key or g["proposed_keeper"]
-            if not keep and members:
-                keep = members[0]["media_key"]
-            if not keep:
-                raise HTTPException(400, "no keeper available")
-            if keep not in member_keys:
-                raise HTTPException(400, "keep_media_key is not in this group")
-            status = (
-                "accepted"
-                if keep == g["proposed_keeper"]
-                else "overridden"
-            )
-        else:
+        if action not in ("accept", "override"):
             raise HTTPException(400, f"unknown action {action}")
 
-        trash = []
-        for m in members:
-            if m["media_key"] == keep:
-                continue
-            if m["is_favorite"] or m["excluded"]:
-                continue
-            trash.append(m["dedup_key"])
+        raw_keys = body.get("keep_media_keys")
+        if not isinstance(raw_keys, list) or not raw_keys:
+            raw_keys = [keep_media_key] if keep_media_key else []
+        if not raw_keys:
+            fallback = g["proposed_keeper"] or (members[0]["media_key"] if members else "")
+            raw_keys = [fallback] if fallback else []
+        try:
+            decision = resolve_keep_decision(members, [str(k) for k in raw_keys], g["proposed_keeper"])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
         return write_decision(
-            status,
-            keep,
-            trash,
-            override_keeper=keep if status == "overridden" else None,
+            decision["status"],
+            decision["keep"],
+            decision["trash"],
+            override_keeper=decision["override_keeper"],
         )
 
 
