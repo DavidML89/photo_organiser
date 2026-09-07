@@ -17,7 +17,7 @@ from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, T
 
 from photo_organiser.config import Settings, get_settings
 from photo_organiser.db import get_db
-from photo_organiser.paths import thumb_path
+from photo_organiser.paths import preview_path, thumb_path
 
 console = Console()
 
@@ -36,6 +36,15 @@ IMAGE_SUFFIXES = {
 _ANALYZE_MAX_SIDE = 384
 _INK_MIN = 0.025
 _INK_MAX = 0.55
+_MAX_LINE_HEIGHT_FRAC = 0.05
+_MIN_LINE_ASPECT = 4.0
+_MIN_LINE_WIDTH_FRAC = 0.22
+_COLOR_MAX = 25.0
+_SAT_MAX = 0.25
+_SMOOTH_MAX = 0.58
+_SPACING_CV_MAX = 0.7
+DEFAULT_MIN_LINES = 8
+DEFAULT_MIN_COVERAGE = 0.08
 
 
 @dataclass
@@ -51,7 +60,7 @@ class Verdict:
     error: str | None = None
 
 
-def _gray_for_analysis(path: Path) -> tuple[np.ndarray | None, int, int, str | None]:
+def _rgb_for_analysis(path: Path) -> tuple[np.ndarray | None, int, int, str | None]:
     try:
         data = path.read_bytes()
     except OSError as exc:
@@ -66,12 +75,57 @@ def _gray_for_analysis(path: Path) -> tuple[np.ndarray | None, int, int, str | N
             arr = np.array(rgb)
     except Exception as exc:  # noqa: BLE001
         return None, 0, 0, f"{type(exc).__name__}: {exc}"
-    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-    return gray, width, height, None
+    return arr, width, height, None
 
 
-def _line_stats(gray: np.ndarray) -> tuple[int, float, float]:
-    """Horizontal text-line bars after adaptive threshold + morphological close."""
+def _inner(arr: np.ndarray, margin: float = 0.12) -> np.ndarray:
+    height, width = arr.shape[:2]
+    dy, dx = int(height * margin), int(width * margin)
+    cropped = arr[dy : height - dy or height, dx : width - dx or width]
+    return cropped if cropped.size else arr
+
+
+def _colorfulness(rgb: np.ndarray) -> float:
+    red = rgb[:, :, 0].astype(np.float32)
+    green = rgb[:, :, 1].astype(np.float32)
+    blue = rgb[:, :, 2].astype(np.float32)
+    rg = red - green
+    yb = 0.5 * (red + green) - blue
+    return float(
+        np.sqrt(rg.std() ** 2 + yb.std() ** 2)
+        + 0.3 * np.sqrt(rg.mean() ** 2 + yb.mean() ** 2)
+    )
+
+
+def _sat_mean(rgb: np.ndarray) -> float:
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    return float(hsv[:, :, 1].mean() / 255.0)
+
+
+def _smooth_block_fraction(gray: np.ndarray, block: int = 16, std_max: float = 12.0) -> float:
+    height, width = gray.shape
+    total = 0
+    smooth = 0
+    for y in range(0, height - block + 1, block):
+        for x in range(0, width - block + 1, block):
+            total += 1
+            if gray[y : y + block, x : x + block].std() < std_max:
+                smooth += 1
+    return smooth / total if total else 0.0
+
+
+def _spacing_ok(ys: list[int]) -> bool:
+    if len(ys) < 4:
+        return True
+    gaps = np.diff(np.sort(np.array(ys, dtype=np.float32)))
+    mean = float(gaps.mean())
+    if mean < 1:
+        return False
+    return float(gaps.std() / mean) <= _SPACING_CV_MAX
+
+
+def _thin_line_stats(gray: np.ndarray) -> tuple[int, float, float, list[int]]:
+    """Wide, short bars after adaptive threshold + horizontal close."""
     height, width = gray.shape
     binary = cv2.adaptiveThreshold(
         gray,
@@ -89,36 +143,51 @@ def _line_stats(gray: np.ndarray) -> tuple[int, float, float]:
         cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_w, 1)),
     )
     contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    max_h = max(3, int(height * _MAX_LINE_HEIGHT_FRAC))
+    min_width = width * _MIN_LINE_WIDTH_FRAC
     lines = 0
     area = 0
-    min_width = width * 0.18
+    ys: list[int] = []
     for contour in contours:
-        _x, _y, box_w, box_h = cv2.boundingRect(contour)
-        if box_h < 2 or box_w < min_width:
+        _x, y, box_w, box_h = cv2.boundingRect(contour)
+        if box_h < 2 or box_h > max_h or box_w < min_width:
             continue
-        if box_w / max(box_h, 1) < 3.2:
+        if box_w / box_h < _MIN_LINE_ASPECT:
             continue
         lines += 1
         area += box_w * box_h
+        ys.append(y)
     coverage = area / max(width * height, 1)
-    return lines, coverage, ink
+    return lines, coverage, ink, ys
+
+
+def _photographic(rgb: np.ndarray, gray: np.ndarray) -> bool:
+    sample = _inner(rgb)
+    return (
+        _colorfulness(sample) >= _COLOR_MAX
+        or _sat_mean(sample) >= _SAT_MAX
+        or _smooth_block_fraction(gray) >= _SMOOTH_MAX
+    )
 
 
 def inspect_file(
     path: Path,
     *,
-    min_lines: int = 5,
-    min_coverage: float = 0.10,
+    min_lines: int = DEFAULT_MIN_LINES,
+    min_coverage: float = DEFAULT_MIN_COVERAGE,
 ) -> Verdict:
-    gray, width, height, error = _gray_for_analysis(path)
-    if gray is None:
+    rgb, width, height, error = _rgb_for_analysis(path)
+    if rgb is None:
         return Verdict(path=str(path), is_text=False, reasons=["unreadable"], error=error)
-    lines, coverage, ink = _line_stats(gray)
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    lines, coverage, ink, ys = _thin_line_stats(gray)
     reasons: list[str] = []
     if (
-        lines >= min_lines
+        not _photographic(rgb, gray)
+        and lines >= min_lines
         and coverage >= min_coverage
         and _INK_MIN <= ink <= _INK_MAX
+        and _spacing_ok(ys)
     ):
         reasons.append("text_lines")
     return Verdict(
@@ -167,8 +236,8 @@ def scan_tree(
     move_to: Path | None = None,
     copy_to: Path | None = None,
     report: Path | None = None,
-    min_lines: int = 5,
-    min_coverage: float = 0.10,
+    min_lines: int = DEFAULT_MIN_LINES,
+    min_coverage: float = DEFAULT_MIN_COVERAGE,
     limit: int | None = None,
 ) -> dict:
     if move_to is not None and copy_to is not None:
@@ -222,12 +291,20 @@ def scan_tree(
     return stats
 
 
+def _best_local_image(media_key: str, settings: Settings) -> Path | None:
+    preview = preview_path(media_key, settings.previews_dir)
+    if preview.exists():
+        return preview
+    thumb = thumb_path(media_key, settings.thumbs_dir)
+    return thumb if thumb.exists() else None
+
+
 def scan_thumbs(
     settings: Settings | None = None,
     *,
     report: Path | None = None,
-    min_lines: int = 5,
-    min_coverage: float = 0.10,
+    min_lines: int = DEFAULT_MIN_LINES,
+    min_coverage: float = DEFAULT_MIN_COVERAGE,
     limit: int | None = None,
 ) -> dict:
     settings = settings or get_settings()
@@ -285,8 +362,8 @@ def scan_thumbs(
             task = progress.add_task("text-thumbs", total=len(rows))
             for row in rows:
                 mk = row["media_key"]
-                path = thumb_path(mk, settings.thumbs_dir)
-                if not path.exists():
+                path = _best_local_image(mk, settings)
+                if path is None:
                     stats["missing"] += 1
                     progress.advance(task)
                     continue

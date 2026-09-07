@@ -266,9 +266,9 @@ def text_scan_cmd(
         None, "--copy-to", help="Copy text-heavy files here instead of moving"
     ),
     report: Optional[Path] = typer.Option(None, "--report", help="Write JSONL verdicts"),
-    min_lines: int = typer.Option(5, "--min-lines", help="Minimum detected text-line bars"),
+    min_lines: int = typer.Option(8, "--min-lines", help="Minimum detected text-line bars"),
     min_coverage: float = typer.Option(
-        0.10, "--min-coverage", help="Minimum page fraction covered by those lines"
+        0.08, "--min-coverage", help="Minimum page fraction covered by those lines"
     ),
     limit: Optional[int] = typer.Option(None, help="Max files to inspect"),
 ) -> None:
@@ -291,9 +291,9 @@ def text_thumbs_cmd(
     report: Optional[Path] = typer.Option(
         None, "--report", help="JSONL path (default: data_root/text_thumbs.jsonl)"
     ),
-    min_lines: int = typer.Option(5, "--min-lines", help="Minimum detected text-line bars"),
+    min_lines: int = typer.Option(8, "--min-lines", help="Minimum detected text-line bars"),
     min_coverage: float = typer.Option(
-        0.10, "--min-coverage", help="Minimum page fraction covered by those lines"
+        0.08, "--min-coverage", help="Minimum page fraction covered by those lines"
     ),
     limit: Optional[int] = typer.Option(None, help="Max thumbs to inspect"),
 ) -> None:
