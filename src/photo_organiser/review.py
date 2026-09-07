@@ -19,6 +19,7 @@ from photo_organiser.db import get_db
 from photo_organiser.images import looks_like_image_bytes, looks_like_image_file
 from photo_organiser.models import GroupMemberView, GroupView, ScoreBreakdown
 from photo_organiser.paths import full_path, large_media_url, preview_path, thumb_path
+from photo_organiser.text import decide_text, next_text_item, text_queue_counts
 
 
 def resolve_keep_decision(
@@ -157,6 +158,7 @@ async def index(request: Request):
         ).fetchone()["c"]
         gid = _next_pending(conn)
         corrupt = corrupt_queue_counts(conn)
+        text = text_queue_counts(conn)
     return templates.TemplateResponse(
         request,
         "review.html",
@@ -165,6 +167,7 @@ async def index(request: Request):
             "decided": decided,
             "initial_group_id": gid,
             "corrupt_pending": corrupt["pending"],
+            "text_pending": text["pending"],
         },
     )
 
@@ -303,6 +306,45 @@ async def api_corrupt_decide(media_key: str, request: Request):
     return {**result, **counts}
 
 
+@app.get("/text", response_class=HTMLResponse)
+async def text_index(request: Request):
+    settings = get_settings()
+    with get_db(settings.db_path) as conn:
+        counts = text_queue_counts(conn)
+    return templates.TemplateResponse(
+        request,
+        "text.html",
+        {"pending": counts["pending"], "decided": counts["decided"]},
+    )
+
+
+@app.get("/api/text/next")
+async def api_text_next(after: str | None = None):
+    settings = get_settings()
+    with get_db(settings.db_path) as conn:
+        item = next_text_item(conn, after)
+        counts = text_queue_counts(conn)
+    if not item:
+        return JSONResponse({"done": True, **counts})
+    return {**item, **counts}
+
+
+@app.post("/api/text/{media_key}/decide")
+async def api_text_decide(media_key: str, request: Request):
+    body = await request.json()
+    action = body.get("action")
+    settings = get_settings()
+    with get_db(settings.db_path) as conn:
+        try:
+            result = decide_text(conn, media_key, action)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(404, "not a flagged photo") from exc
+        counts = text_queue_counts(conn)
+    return {**result, **counts}
+
+
 @app.post("/api/group/{group_id}/decide")
 async def decide(group_id: str, request: Request):
     body = await request.json()
@@ -415,6 +457,7 @@ def run_server(host: str | None = None, port: int | None = None) -> None:
     port = port or settings.port
     print(f"Duplicates: http://{host}:{port}/")
     print(f"Corrupt:    http://{host}:{port}/corrupt")
+    print(f"Text:       http://{host}:{port}/text")
     uvicorn.run(
         "photo_organiser.review:app",
         host=host,

@@ -108,6 +108,17 @@ CREATE TABLE IF NOT EXISTS corrupt_flags (
     scanned_at TEXT NOT NULL,
     review_status TEXT NOT NULL DEFAULT 'pending'
 );
+
+CREATE TABLE IF NOT EXISTS text_flags (
+    media_key TEXT PRIMARY KEY REFERENCES photos(media_key) ON DELETE CASCADE,
+    is_text INTEGER NOT NULL DEFAULT 0,
+    reasons TEXT,
+    line_count INTEGER,
+    coverage REAL,
+    ink_fraction REAL,
+    scanned_at TEXT NOT NULL,
+    review_status TEXT NOT NULL DEFAULT 'pending'
+);
 """
 
 

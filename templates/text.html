@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>photo-organiser · corrupt</title>
+  <title>photo-organiser · text</title>
   <style>
     :root {
       --bg: #0f1115;
@@ -64,7 +64,6 @@
     }
     .meta { margin-top: 12px; font-size: 13px; color: var(--muted); }
     .meta .name { color: var(--text); font-weight: 600; font-size: 15px; }
-    .fav { color: var(--warn); font-weight: 700; }
     #empty, #done {
       padding: 60px 20px;
       text-align: center;
@@ -91,8 +90,8 @@
       font-size: 13px;
       cursor: pointer;
     }
-    button.primary { background: var(--bad); color: #0f1115; border-color: transparent; font-weight: 700; }
-    button.keep { background: var(--good); color: #0f1115; border-color: transparent; font-weight: 700; }
+    button.primary { background: var(--good); color: #0f1115; border-color: transparent; font-weight: 700; }
+    button.reject { background: transparent; color: var(--bad); border-color: var(--bad); }
     #lightbox {
       display: none;
       position: fixed;
@@ -116,28 +115,27 @@
 </head>
 <body>
   <header>
-    <h1>photo-organiser · corrupt photos</h1>
+    <h1>photo-organiser · text (books, notes)</h1>
     <div class="stats">
       <a href="/">Duplicates</a>
-      <a href="/text">Text</a>
+      <a href="/corrupt">Corrupt</a>
       <span id="pending">{{ pending }}</span> pending ·
       <span id="decided">{{ decided }}</span> decided
     </div>
   </header>
   <div class="help">
-    <kbd>D</kbd> confirm trash · <kbd>K</kbd> keep (false positive) ·
+    <kbd>A</kbd> confirm it is text · <kbd>K</kbd> not text ·
     <kbd>S</kbd> skip · <kbd>Space</kbd> larger view ·
     <kbd>Esc</kbd> close viewer. Then
-    <code>photo-organiser apply export</code>.
+    <code>photo-organiser text export</code>.
   </div>
-  <div id="empty" hidden>No flagged photos. Run <code>photo-organiser corrupt thumbs</code> first.</div>
-  <div id="done" hidden>Queue empty. Export with <code>photo-organiser apply export</code>.</div>
+  <div id="empty" hidden>No flagged photos. Run <code>photo-organiser text thumbs</code> first.</div>
+  <div id="done" hidden>Queue empty. Export with <code>photo-organiser text export</code>.</div>
   <div id="stage" hidden>
     <img id="photo" alt="flagged photo" />
     <div class="meta">
       <div class="name" id="filename">—</div>
       <div id="details"></div>
-      <div id="fav" class="fav" hidden>FAVORITE — will not be exported for trash</div>
     </div>
   </div>
   <div id="lightbox" aria-hidden="true">
@@ -145,8 +143,8 @@
     <a id="lb-gphotos" href="#" target="_blank" rel="noopener">Open in Google Photos</a>
   </div>
   <footer>
-    <button class="primary" id="btn-trash">Trash (D)</button>
-    <button class="keep" id="btn-keep">Keep (K)</button>
+    <button class="primary" id="btn-accept">Text (A)</button>
+    <button class="reject" id="btn-reject">Not text (K)</button>
     <button id="btn-skip">Skip (S)</button>
     <button id="btn-view">View large (Space)</button>
   </footer>
@@ -208,12 +206,9 @@
       photo.src = `/media/${key}?kind=preview`;
       document.getElementById('filename').textContent = item.file_name || item.media_key;
       const reasons = (item.reasons || []).join(', ') || '—';
-      const fill = typeof item.fill_fraction === 'number'
-        ? `${Math.round(item.fill_fraction * 100)}% fill`
-        : '';
+      const cov = typeof item.coverage === 'number' ? `${Math.round(item.coverage * 100)}% lines` : '';
       document.getElementById('details').textContent =
-        `${item.res_width || '?'}×${item.res_height || '?'} · ${reasons} · ${fill}`;
-      document.getElementById('fav').hidden = !item.is_favorite;
+        `${item.res_width || '?'}×${item.res_height || '?'} · ${reasons} · ${item.line_count || 0} bars · ${cov}`;
       document.getElementById('pending').textContent = item.pending;
       document.getElementById('decided').textContent = item.decided;
     }
@@ -221,7 +216,7 @@
     async function loadNext(after) {
       closeLightbox();
       const q = after ? `?after=${encodeURIComponent(after)}` : '';
-      const res = await fetch(`/api/corrupt/next${q}`);
+      const res = await fetch(`/api/text/next${q}`);
       const data = await res.json();
       if (data.done) {
         document.getElementById('pending').textContent = data.pending || 0;
@@ -234,11 +229,7 @@
 
     async function decide(action) {
       if (!current) return;
-      if (action === 'trash' && current.is_favorite) {
-        alert('Favorites are not exported for trash. Use Keep if this flag is wrong.');
-        return;
-      }
-      const res = await fetch(`/api/corrupt/${encodeURIComponent(current.media_key)}/decide`, {
+      const res = await fetch(`/api/text/${encodeURIComponent(current.media_key)}/decide`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action }),
@@ -250,8 +241,8 @@
       await loadNext(current.media_key);
     }
 
-    document.getElementById('btn-trash').onclick = () => decide('trash');
-    document.getElementById('btn-keep').onclick = () => decide('keep');
+    document.getElementById('btn-accept').onclick = () => decide('accept');
+    document.getElementById('btn-reject').onclick = () => decide('reject');
     document.getElementById('btn-skip').onclick = () => decide('skip');
     document.getElementById('btn-view').onclick = openLightbox;
     photo.ondblclick = openLightbox;
@@ -263,8 +254,8 @@
       if (lightboxOpen() && e.key === 'Escape') { closeLightbox(); return; }
       if (!current) return;
       if (e.key === ' ' || e.key === 'v' || e.key === 'V') { e.preventDefault(); openLightbox(); }
-      else if (e.key === 'd' || e.key === 'D') decide('trash');
-      else if (e.key === 'k' || e.key === 'K') decide('keep');
+      else if (e.key === 'a' || e.key === 'A' || e.key === 'Enter') decide('accept');
+      else if (e.key === 'k' || e.key === 'K') decide('reject');
       else if (e.key === 's' || e.key === 'S') decide('skip');
     });
 

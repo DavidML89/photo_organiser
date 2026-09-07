@@ -19,10 +19,12 @@ census_app = typer.Typer(help="Import / report library census")
 fetch_app = typer.Typer(help="Download thumbnails and previews")
 apply_app = typer.Typer(help="Export trash / restore payloads")
 corrupt_app = typer.Typer(help="Find truncated / corrupt recovered photos")
+text_app = typer.Typer(help="Find photos of books, notes, and other text")
 app.add_typer(census_app, name="census")
 app.add_typer(fetch_app, name="fetch")
 app.add_typer(apply_app, name="apply")
 app.add_typer(corrupt_app, name="corrupt")
+app.add_typer(text_app, name="text")
 
 
 @app.callback()
@@ -254,12 +256,67 @@ def corrupt_thumbs_cmd(
     scan_thumbs(report=report, min_fill=min_fill, limit=limit)
 
 
+@text_app.command("scan")
+def text_scan_cmd(
+    root: Path = typer.Argument(..., exists=True, file_okay=False, help="Folder of photos"),
+    move_to: Optional[Path] = typer.Option(
+        None, "--move-to", help="Move text-heavy files here, keeping relative paths"
+    ),
+    copy_to: Optional[Path] = typer.Option(
+        None, "--copy-to", help="Copy text-heavy files here instead of moving"
+    ),
+    report: Optional[Path] = typer.Option(None, "--report", help="Write JSONL verdicts"),
+    min_lines: int = typer.Option(5, "--min-lines", help="Minimum detected text-line bars"),
+    min_coverage: float = typer.Option(
+        0.10, "--min-coverage", help="Minimum page fraction covered by those lines"
+    ),
+    limit: Optional[int] = typer.Option(None, help="Max files to inspect"),
+) -> None:
+    """Detect books, notes, and other text-heavy pages in a local folder."""
+    from photo_organiser.text import scan_tree
+
+    scan_tree(
+        root,
+        move_to=move_to,
+        copy_to=copy_to,
+        report=report,
+        min_lines=min_lines,
+        min_coverage=min_coverage,
+        limit=limit,
+    )
+
+
+@text_app.command("thumbs")
+def text_thumbs_cmd(
+    report: Optional[Path] = typer.Option(
+        None, "--report", help="JSONL path (default: data_root/text_thumbs.jsonl)"
+    ),
+    min_lines: int = typer.Option(5, "--min-lines", help="Minimum detected text-line bars"),
+    min_coverage: float = typer.Option(
+        0.10, "--min-coverage", help="Minimum page fraction covered by those lines"
+    ),
+    limit: Optional[int] = typer.Option(None, help="Max thumbs to inspect"),
+) -> None:
+    """Scan cached Google Photos thumbs for books, notes, and documents."""
+    from photo_organiser.text import scan_thumbs
+
+    scan_thumbs(report=report, min_lines=min_lines, min_coverage=min_coverage, limit=limit)
+
+
+@text_app.command("export")
+def text_export_cmd() -> None:
+    """Write accepted text photos to data_root/text_accepted.jsonl."""
+    from photo_organiser.text import export_accepted
+
+    export_accepted()
+
+
 @app.command("review")
 def review_cmd(
     host: Optional[str] = typer.Option(None),
     port: Optional[int] = typer.Option(None),
 ) -> None:
-    """Launch the local review UI (duplicates at `/`, corrupt photos at `/corrupt`)."""
+    """Launch the local review UI (`/`, `/corrupt`, `/text`)."""
     from photo_organiser.review import run_server
 
     run_server(host=host, port=port)
