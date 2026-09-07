@@ -259,7 +259,7 @@ def review_cmd(
     host: Optional[str] = typer.Option(None),
     port: Optional[int] = typer.Option(None),
 ) -> None:
-    """Launch the local review UI."""
+    """Launch the local review UI (duplicates at `/`, corrupt photos at `/corrupt`)."""
     from photo_organiser.review import run_server
 
     run_server(host=host, port=port)

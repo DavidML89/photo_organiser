@@ -105,9 +105,18 @@ CREATE TABLE IF NOT EXISTS corrupt_flags (
     reasons TEXT,
     fill_fraction REAL,
     fill_color TEXT,
-    scanned_at TEXT NOT NULL
+    scanned_at TEXT NOT NULL,
+    review_status TEXT NOT NULL DEFAULT 'pending'
 );
 """
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(corrupt_flags)")}
+    if cols and "review_status" not in cols:
+        conn.execute(
+            "ALTER TABLE corrupt_flags ADD COLUMN review_status TEXT NOT NULL DEFAULT 'pending'"
+        )
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -115,6 +124,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), timeout=60.0)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
 
 

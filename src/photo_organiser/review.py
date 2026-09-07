@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 
 from photo_organiser.config import get_settings
 from photo_organiser.cookies import load_netscape_cookies
+from photo_organiser.corrupt import corrupt_queue_counts, decide_corrupt, next_corrupt_item
 from photo_organiser.db import get_db
 from photo_organiser.images import looks_like_image_bytes, looks_like_image_file
 from photo_organiser.models import GroupMemberView, GroupView, ScoreBreakdown
@@ -155,6 +156,7 @@ async def index(request: Request):
             "SELECT COUNT(*) AS c FROM groups WHERE status!='pending'"
         ).fetchone()["c"]
         gid = _next_pending(conn)
+        corrupt = corrupt_queue_counts(conn)
     return templates.TemplateResponse(
         request,
         "review.html",
@@ -162,6 +164,7 @@ async def index(request: Request):
             "pending": pending,
             "decided": decided,
             "initial_group_id": gid,
+            "corrupt_pending": corrupt["pending"],
         },
     )
 
@@ -259,6 +262,45 @@ async def media(media_key: str, kind: str = "preview"):
     if not path.exists():
         raise HTTPException(404, "media not cached")
     return FileResponse(path, media_type="image/jpeg")
+
+
+@app.get("/corrupt", response_class=HTMLResponse)
+async def corrupt_index(request: Request):
+    settings = get_settings()
+    with get_db(settings.db_path) as conn:
+        counts = corrupt_queue_counts(conn)
+    return templates.TemplateResponse(
+        request,
+        "corrupt.html",
+        {"pending": counts["pending"], "decided": counts["decided"]},
+    )
+
+
+@app.get("/api/corrupt/next")
+async def api_corrupt_next(after: str | None = None):
+    settings = get_settings()
+    with get_db(settings.db_path) as conn:
+        item = next_corrupt_item(conn, after)
+        counts = corrupt_queue_counts(conn)
+    if not item:
+        return JSONResponse({"done": True, **counts})
+    return {**item, **counts}
+
+
+@app.post("/api/corrupt/{media_key}/decide")
+async def api_corrupt_decide(media_key: str, request: Request):
+    body = await request.json()
+    action = body.get("action")
+    settings = get_settings()
+    with get_db(settings.db_path) as conn:
+        try:
+            result = decide_corrupt(conn, media_key, action)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(404, "not a flagged photo") from exc
+        counts = corrupt_queue_counts(conn)
+    return {**result, **counts}
 
 
 @app.post("/api/group/{group_id}/decide")
@@ -369,9 +411,13 @@ def run_server(host: str | None = None, port: int | None = None) -> None:
     import uvicorn
 
     settings = get_settings()
+    host = host or settings.host
+    port = port or settings.port
+    print(f"Duplicates: http://{host}:{port}/")
+    print(f"Corrupt:    http://{host}:{port}/corrupt")
     uvicorn.run(
         "photo_organiser.review:app",
-        host=host or settings.host,
-        port=port or settings.port,
+        host=host,
+        port=port,
         reload=False,
     )

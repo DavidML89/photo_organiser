@@ -157,15 +157,25 @@ def dry_run_report(settings: Settings | None = None) -> dict:
                 trash_keys,
             ).fetchone()["c"]
 
+        corrupt_trash = conn.execute(
+            """
+            SELECT COUNT(*) AS c FROM corrupt_flags cf
+            JOIN photos p ON p.media_key = cf.media_key
+            WHERE cf.corrupted=1 AND cf.review_status='trash'
+              AND p.is_favorite=0 AND p.excluded=0 AND p.in_album=0
+            """
+        ).fetchone()["c"]
+
     report = {
         "groups_pending_review": pending,
         "groups_decided": accepted,
-        "items_to_trash": len(trash_keys),
+        "items_to_trash": len(trash_keys) + corrupt_trash,
         "items_to_keep": len(keep_keys),
+        "corrupt_to_trash": corrupt_trash,
         "estimated_bytes": space,
         "estimated_gb": round(space / (1024**3), 3) if space else 0,
         "favorite_conflicts": fav_hits,
-        "safe_to_apply": fav_hits == 0 and len(trash_keys) > 0,
+        "safe_to_apply": fav_hits == 0 and (len(trash_keys) + corrupt_trash) > 0,
     }
     table = Table(title="Dry-run apply report")
     table.add_column("Metric")

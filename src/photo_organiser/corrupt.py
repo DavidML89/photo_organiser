@@ -272,14 +272,21 @@ def scan_thumbs(
 
         upsert = """
             INSERT INTO corrupt_flags(
-                media_key, corrupted, reasons, fill_fraction, fill_color, scanned_at
-            ) VALUES(?, ?, ?, ?, ?, ?)
+                media_key, corrupted, reasons, fill_fraction, fill_color,
+                scanned_at, review_status
+            ) VALUES(?, ?, ?, ?, ?, ?, 'pending')
             ON CONFLICT(media_key) DO UPDATE SET
                 corrupted=excluded.corrupted,
                 reasons=excluded.reasons,
                 fill_fraction=excluded.fill_fraction,
                 fill_color=excluded.fill_color,
-                scanned_at=excluded.scanned_at
+                scanned_at=excluded.scanned_at,
+                review_status=CASE
+                    WHEN excluded.corrupted=1
+                         AND corrupt_flags.review_status IN ('kept','trash','skipped')
+                    THEN corrupt_flags.review_status
+                    ELSE 'pending'
+                END
         """
         with (
             report.open("w", encoding="utf-8") as report_fp,
@@ -333,3 +340,85 @@ def scan_thumbs(
     console.print(stats)
     console.print(f"Report: {report}")
     return stats
+
+
+def corrupt_queue_counts(conn) -> dict:
+    pending = conn.execute(
+        """
+        SELECT COUNT(*) AS c FROM corrupt_flags
+        WHERE corrupted=1 AND COALESCE(review_status, 'pending')='pending'
+        """
+    ).fetchone()["c"]
+    decided = conn.execute(
+        """
+        SELECT COUNT(*) AS c FROM corrupt_flags
+        WHERE corrupted=1 AND COALESCE(review_status, 'pending')!='pending'
+        """
+    ).fetchone()["c"]
+    return {"pending": pending, "decided": decided}
+
+
+def next_corrupt_item(conn, after: str | None = None) -> dict | None:
+    if after:
+        row = conn.execute(
+            """
+            SELECT cf.media_key, cf.reasons, cf.fill_fraction, cf.fill_color,
+                   p.file_name, p.res_width, p.res_height, p.is_favorite, p.dedup_key
+            FROM corrupt_flags cf
+            JOIN photos p ON p.media_key = cf.media_key
+            WHERE cf.corrupted=1 AND COALESCE(cf.review_status, 'pending')='pending'
+              AND cf.media_key > ?
+            ORDER BY cf.media_key
+            LIMIT 1
+            """,
+            (after,),
+        ).fetchone()
+        if row:
+            return _corrupt_item(row)
+    row = conn.execute(
+        """
+        SELECT cf.media_key, cf.reasons, cf.fill_fraction, cf.fill_color,
+               p.file_name, p.res_width, p.res_height, p.is_favorite, p.dedup_key
+        FROM corrupt_flags cf
+        JOIN photos p ON p.media_key = cf.media_key
+        WHERE cf.corrupted=1 AND COALESCE(cf.review_status, 'pending')='pending'
+        ORDER BY cf.media_key
+        LIMIT 1
+        """
+    ).fetchone()
+    return _corrupt_item(row) if row else None
+
+
+def _corrupt_item(row) -> dict:
+    try:
+        reasons = json.loads(row["reasons"] or "[]")
+    except json.JSONDecodeError:
+        reasons = [row["reasons"]] if row["reasons"] else []
+    return {
+        "media_key": row["media_key"],
+        "dedup_key": row["dedup_key"],
+        "file_name": row["file_name"],
+        "reasons": reasons,
+        "fill_fraction": row["fill_fraction"] or 0.0,
+        "fill_color": row["fill_color"],
+        "res_width": row["res_width"],
+        "res_height": row["res_height"],
+        "is_favorite": bool(row["is_favorite"]),
+    }
+
+
+def decide_corrupt(conn, media_key: str, action: str) -> dict:
+    status = {"keep": "kept", "trash": "trash", "skip": "skipped"}.get(action)
+    if status is None:
+        raise ValueError(f"unknown action {action}")
+    row = conn.execute(
+        "SELECT media_key FROM corrupt_flags WHERE media_key=? AND corrupted=1",
+        (media_key,),
+    ).fetchone()
+    if not row:
+        raise KeyError(media_key)
+    conn.execute(
+        "UPDATE corrupt_flags SET review_status=? WHERE media_key=?",
+        (status, media_key),
+    )
+    return {"ok": True, "status": status, "media_key": media_key}

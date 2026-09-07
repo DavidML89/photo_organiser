@@ -166,6 +166,7 @@
   <header>
     <h1>photo-organiser · review duplicates</h1>
     <div class="stats">
+      <a href="/corrupt" style="color: var(--accent); margin-right: 16px;">Corrupt photos ({{ corrupt_pending|default(0) }})</a>
       <span id="pending">{{ pending }}</span> pending ·
       <span id="decided">{{ decided }}</span> decided ·
       group <code id="gid">—</code>

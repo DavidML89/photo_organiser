@@ -25,6 +25,7 @@ def export_trash_payload(settings: Settings | None = None) -> Path:
 
     run_id = f"run-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
     items: list[dict] = []
+    seen: set[str] = set()
 
     with get_db(settings.db_path) as conn:
         rows = conn.execute(
@@ -47,6 +48,9 @@ def export_trash_payload(settings: Settings | None = None) -> Path:
                     continue
                 if photo["is_favorite"] or photo["excluded"] or photo["in_album"]:
                     continue
+                if photo["media_key"] in seen:
+                    continue
+                seen.add(photo["media_key"])
                 items.append(
                     {
                         "media_key": photo["media_key"],
@@ -54,6 +58,27 @@ def export_trash_payload(settings: Settings | None = None) -> Path:
                         "group_id": row["group_id"],
                     }
                 )
+
+        for row in conn.execute(
+            """
+            SELECT p.media_key, p.dedup_key, p.is_favorite, p.excluded, p.in_album
+            FROM corrupt_flags cf
+            JOIN photos p ON p.media_key = cf.media_key
+            WHERE cf.corrupted=1 AND cf.review_status='trash'
+            """
+        ).fetchall():
+            if row["is_favorite"] or row["excluded"] or row["in_album"]:
+                continue
+            if row["media_key"] in seen:
+                continue
+            seen.add(row["media_key"])
+            items.append(
+                {
+                    "media_key": row["media_key"],
+                    "dedup_key": row["dedup_key"],
+                    "group_id": "corrupt",
+                }
+            )
 
     payload = {
         "run_id": run_id,

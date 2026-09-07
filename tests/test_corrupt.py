@@ -10,7 +10,13 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from photo_organiser.config import Settings
-from photo_organiser.corrupt import inspect_file, scan_thumbs, scan_tree
+from photo_organiser.corrupt import (
+    decide_corrupt,
+    inspect_file,
+    next_corrupt_item,
+    scan_thumbs,
+    scan_tree,
+)
 from photo_organiser.db import get_db
 from photo_organiser.paths import thumb_path
 
@@ -140,3 +146,14 @@ def test_scan_thumbs_uses_cached_jpegs(tmp_path: Path):
             "SELECT media_key FROM corrupt_flags WHERE corrupted=1"
         ).fetchall()
         assert [r["media_key"] for r in flagged] == ["mk_bad"]
+
+        item = next_corrupt_item(conn)
+        assert item is not None
+        assert item["media_key"] == "mk_bad"
+        assert "decoder_fill" in item["reasons"]
+        decide_corrupt(conn, "mk_bad", "trash")
+        assert next_corrupt_item(conn) is None
+        status = conn.execute(
+            "SELECT review_status FROM corrupt_flags WHERE media_key='mk_bad'"
+        ).fetchone()["review_status"]
+        assert status == "trash"

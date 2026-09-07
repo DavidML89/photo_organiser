@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>photo-organiser · corrupt</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #1a1d24;
+      --text: #e8eaed;
+      --muted: #9aa0a6;
+      --accent: #8ab4f8;
+      --good: #81c995;
+      --warn: #fdd663;
+      --bad: #f28b82;
+      --border: #2d3139;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+    .stats { color: var(--muted); font-size: 13px; }
+    .stats a { color: var(--accent); margin-right: 16px; }
+    .help {
+      padding: 8px 20px;
+      font-size: 12px;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      line-height: 1.5;
+    }
+    .help kbd {
+      background: #2a2f38;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-size: 11px;
+    }
+    #stage {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 20px 20px 96px;
+    }
+    #stage img {
+      width: 100%;
+      max-height: calc(100vh - 240px);
+      object-fit: contain;
+      background: #000;
+      border-radius: 10px;
+      border: 2px solid var(--border);
+      display: block;
+    }
+    .meta { margin-top: 12px; font-size: 13px; color: var(--muted); }
+    .meta .name { color: var(--text); font-weight: 600; font-size: 15px; }
+    .fav { color: var(--warn); font-weight: 700; }
+    #empty, #done {
+      padding: 60px 20px;
+      text-align: center;
+      color: var(--muted);
+    }
+    footer {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 12px 20px;
+      background: rgba(26,29,36,0.95);
+      border-top: 1px solid var(--border);
+    }
+    button {
+      background: #2a2f38;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button.primary { background: var(--bad); color: #0f1115; border-color: transparent; font-weight: 700; }
+    button.keep { background: var(--good); color: #0f1115; border-color: transparent; font-weight: 700; }
+    #lightbox {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: rgba(0, 0, 0, 0.92);
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+      padding: 24px;
+    }
+    #lightbox.open { display: flex; }
+    #lightbox img {
+      max-width: 96vw;
+      max-height: calc(100vh - 80px);
+      object-fit: contain;
+    }
+    #lightbox a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>photo-organiser · corrupt photos</h1>
+    <div class="stats">
+      <a href="/">Duplicates</a>
+      <span id="pending">{{ pending }}</span> pending ·
+      <span id="decided">{{ decided }}</span> decided
+    </div>
+  </header>
+  <div class="help">
+    <kbd>D</kbd> confirm trash · <kbd>K</kbd> keep (false positive) ·
+    <kbd>S</kbd> skip · <kbd>Space</kbd> larger view ·
+    <kbd>Esc</kbd> close viewer. Then
+    <code>photo-organiser apply export</code>.
+  </div>
+  <div id="empty" hidden>No flagged photos. Run <code>photo-organiser corrupt thumbs</code> first.</div>
+  <div id="done" hidden>Queue empty. Export with <code>photo-organiser apply export</code>.</div>
+  <div id="stage" hidden>
+    <img id="photo" alt="flagged photo" />
+    <div class="meta">
+      <div class="name" id="filename">—</div>
+      <div id="details"></div>
+      <div id="fav" class="fav" hidden>FAVORITE — will not be exported for trash</div>
+    </div>
+  </div>
+  <div id="lightbox" aria-hidden="true">
+    <img id="lb-img" alt="large preview" />
+    <a id="lb-gphotos" href="#" target="_blank" rel="noopener">Open in Google Photos</a>
+  </div>
+  <footer>
+    <button class="primary" id="btn-trash">Trash (D)</button>
+    <button class="keep" id="btn-keep">Keep (K)</button>
+    <button id="btn-skip">Skip (S)</button>
+    <button id="btn-view">View large (Space)</button>
+  </footer>
+  <script>
+    let current = null;
+    const stage = document.getElementById('stage');
+    const empty = document.getElementById('empty');
+    const done = document.getElementById('done');
+    const photo = document.getElementById('photo');
+    const lightbox = document.getElementById('lightbox');
+    const lbImg = document.getElementById('lb-img');
+    const lbGphotos = document.getElementById('lb-gphotos');
+
+    function lightboxOpen() {
+      return lightbox.classList.contains('open');
+    }
+    function closeLightbox() {
+      lightbox.classList.remove('open');
+      lbImg.removeAttribute('src');
+    }
+    function openLightbox() {
+      if (!current) return;
+      const key = encodeURIComponent(current.media_key);
+      lbGphotos.href = `https://photos.google.com/photo/${key}`;
+      lbImg.onerror = () => {
+        if (lbImg.dataset.stage === 'full') {
+          lbImg.dataset.stage = 'preview';
+          lbImg.src = `/media/${key}?kind=preview`;
+        } else if (lbImg.dataset.stage === 'preview') {
+          lbImg.dataset.stage = 'thumb';
+          lbImg.src = `/media/${key}?kind=thumb`;
+        }
+      };
+      lbImg.dataset.stage = 'full';
+      lbImg.src = `/media/${key}?kind=full`;
+      lightbox.classList.add('open');
+    }
+
+    function showIdle(kind) {
+      current = null;
+      stage.hidden = true;
+      empty.hidden = kind !== 'empty';
+      done.hidden = kind !== 'done';
+    }
+
+    function render(item) {
+      current = item;
+      empty.hidden = true;
+      done.hidden = true;
+      stage.hidden = false;
+      const key = encodeURIComponent(item.media_key);
+      photo.onerror = () => {
+        if (!photo.dataset.fellback) {
+          photo.dataset.fellback = '1';
+          photo.src = `/media/${key}?kind=thumb`;
+        }
+      };
+      photo.dataset.fellback = '';
+      photo.src = `/media/${key}?kind=preview`;
+      document.getElementById('filename').textContent = item.file_name || item.media_key;
+      const reasons = (item.reasons || []).join(', ') || '—';
+      const fill = typeof item.fill_fraction === 'number'
+        ? `${Math.round(item.fill_fraction * 100)}% fill`
+        : '';
+      document.getElementById('details').textContent =
+        `${item.res_width || '?'}×${item.res_height || '?'} · ${reasons} · ${fill}`;
+      document.getElementById('fav').hidden = !item.is_favorite;
+      document.getElementById('pending').textContent = item.pending;
+      document.getElementById('decided').textContent = item.decided;
+    }
+
+    async function loadNext(after) {
+      closeLightbox();
+      const q = after ? `?after=${encodeURIComponent(after)}` : '';
+      const res = await fetch(`/api/corrupt/next${q}`);
+      const data = await res.json();
+      if (data.done) {
+        document.getElementById('pending').textContent = data.pending || 0;
+        document.getElementById('decided').textContent = data.decided || 0;
+        showIdle((data.decided || 0) > 0 ? 'done' : 'empty');
+        return;
+      }
+      render(data);
+    }
+
+    async function decide(action) {
+      if (!current) return;
+      if (action === 'trash' && current.is_favorite) {
+        alert('Favorites are not exported for trash. Use Keep if this flag is wrong.');
+        return;
+      }
+      const res = await fetch(`/api/corrupt/${encodeURIComponent(current.media_key)}/decide`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      if (!res.ok) {
+        alert('Decision failed: ' + (await res.text()));
+        return;
+      }
+      await loadNext(current.media_key);
+    }
+
+    document.getElementById('btn-trash').onclick = () => decide('trash');
+    document.getElementById('btn-keep').onclick = () => decide('keep');
+    document.getElementById('btn-skip').onclick = () => decide('skip');
+    document.getElementById('btn-view').onclick = openLightbox;
+    photo.ondblclick = openLightbox;
+    document.getElementById('lightbox').onclick = (e) => {
+      if (e.target !== lbImg) closeLightbox();
+    };
+    window.addEventListener('keydown', (e) => {
+      if (e.target && ['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      if (lightboxOpen() && e.key === 'Escape') { closeLightbox(); return; }
+      if (!current) return;
+      if (e.key === ' ' || e.key === 'v' || e.key === 'V') { e.preventDefault(); openLightbox(); }
+      else if (e.key === 'd' || e.key === 'D') decide('trash');
+      else if (e.key === 'k' || e.key === 'K') decide('keep');
+      else if (e.key === 's' || e.key === 'S') decide('skip');
+    });
+
+    loadNext();
+  </script>
+</body>
+</html>
